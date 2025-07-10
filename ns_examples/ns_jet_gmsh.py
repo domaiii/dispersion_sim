@@ -133,7 +133,7 @@ bc_out = fem.dirichletbc(zero_pressure_func, dofs_p_outflow_list, V.sub(1))
 bcs = [bc_in, bc_no_slip, bc_out]
 
 problem = NonlinearProblem(F, w, bcs, J)
-solver = setup_newton_solver(problem, max_iterations=50, 
+solver = setup_newton_solver(problem, max_iterations=20, 
                              ksp_type=KSP.Type.GMRES, 
                              pc_type=PETSc.PC.Type.HYPRE, 
                              tolerance=1e-7)

@@ -59,15 +59,16 @@ def create_2d_th_functionspace(domain: Mesh) -> FunctionSpace:
 
     return fem.functionspace(domain, mixed_elem)
 
-def define_ns_ufl_forms(w: Function, V: FunctionSpace, nu: fem.Constant) -> Tuple[Form, Form]:
+def define_ns_ufl_forms(w: Function, V: FunctionSpace, nu: fem.Constant, enable_supg: bool = False) -> Tuple[Form, Form]:
     """
     Defines the UFL forms (residual F and Jacobian J) for the steady-state
-    Navier-Stokes equations.
+    Navier-Stokes equations, with optional SUPG stabilization.
 
     Args:
         w: The fem.Function representing the current solution vector (u, p).
         V: The mixed function space.
         nu: The kinematic viscosity constant.
+        enable_supg: Boolean flag to enable/disable SUPG stabilization.
 
     Returns:
         A tuple containing the residual form (F) and the Jacobian form (J).
@@ -79,6 +80,18 @@ def define_ns_ufl_forms(w: Function, V: FunctionSpace, nu: fem.Constant) -> Tupl
          + ufl.inner(nu * ufl.grad(u), ufl.grad(v)) * ufl.dx
          - ufl.inner(p, ufl.div(v)) * ufl.dx
          - ufl.inner(ufl.div(u), q) * ufl.dx)
+
+    if enable_supg:
+        h = ufl.CellDiameter(V.mesh) 
+        u_norm = ufl.sqrt(ufl.dot(u, u) + 1e-12) 
+
+        tau = 1.0 / ufl.sqrt( (2.0 * u_norm / h)**2 + (4.0 * nu / h**2)**2 )
+        r_momentum_strong = ufl.dot(u, ufl.nabla_grad(u)) + ufl.grad(p) - nu * ufl.div(ufl.grad(u))
+        r_continuity_strong = ufl.div(u)
+
+        F_supg_momentum = ufl.inner(r_momentum_strong, tau * ufl.dot(u, ufl.nabla_grad(v))) * ufl.dx
+        F_pspg_continuity = ufl.inner(ufl.grad(q), tau * ufl.grad(r_continuity_strong)) * ufl.dx
+        F += F_supg_momentum + F_pspg_continuity
 
     # Define the Jacobian matrix (J), the derivative of F with respect to 'w'.
     J = ufl.derivative(F, w, ufl.TrialFunction(V))
@@ -336,6 +349,80 @@ def setup_pressure_nullspace(V_mixed: FunctionSpace, ksp_solver: PETSc.KSP,
     if comm.rank == 0:
         print("Pressure nullspace successfully set for the KSP solver's matrices (A and P).")
 
+def solve_adaptive_continuation(problem: NonlinearProblem, 
+                                solver: NewtonSolver, 
+                                w: Function,
+                                nu: fem.Constant,
+                                nu_target: float, 
+                                nu_start: float = 1.0,
+                                init_step: float = 0.1,
+                                min_step: float = 0.01) -> bool:
+    """
+    Solve a nonlinear problem using adaptive continuation in the viscosity parameter `nu`.
+
+    This function gradually reduces `nu` from `nu_start` towards `nu_target`, solving the nonlinear
+    problem at each step using a Newton solver. If a step fails to converge, the continuation step 
+    size is halved. If a step succeeds, the step size is doubled to accelerate the continuation.
+    The function aborts if the step size falls below `min_step`.
+
+    Args:
+        problem: The nonlinear variational problem to be solved.
+        solver: The Newton solver used to solve the problem.
+        w: The solution function to be updated.
+        nu: A DOLFINx constant representing the viscosity parameter in the problem.
+        nu_target: The final target value of the viscosity.
+        nu_start: The starting value of the viscosity (default is 1.0).
+        init_step: The initial relative step size used in continuation (default is 0.1).
+        min_step: The minimum allowed relative step size (default is 0.01).
+
+    Returns:
+        A boolean that states True if the method converged and False if not.
+    Raises
+    ------
+    RuntimeError
+        If the Newton solver fails to converge and the step size becomes too small.
+    """
+    cm = problem.L.mesh.comm
+    nu.value = nu_start
+    current_step = init_step
+    old_nu = nu.value
+
+    while nu.value > nu_target:
+        trial_nu = old_nu * (1 - current_step)
+        nu.value = max(trial_nu, nu_target)
+
+        # Attempt to solve with current nu
+        
+        if cm.rank == 0:
+            print(f"Trying nu = {nu.value:.2e}, step = {current_step:.2e} ...")
+            sys.stdout.flush()
+        try:
+            its, converged = solver.solve(w)
+        except:
+            converged = False
+            its = solver.max_it
+
+        if cm.rank == 0:
+            print(f"Converged: {converged}, Newton iterations: {its}")
+            print("----------")
+            sys.stdout.flush()
+
+        if converged:
+            # Success: increase step size, update reference value
+            current_step *= 2.0
+            old_nu = trial_nu
+        else:
+            # Failure: reduce step size
+            current_step *= 0.5
+            if current_step < min_step:
+                if cm.rank == 0:
+                    print("Adaptive continuation method failed due to too small step size.")
+                    sys.stdout.flush()
+
+                return False
+                
+    return True
+
 def solve_with_continuation(problem: NonlinearProblem, 
                             solver: NewtonSolver, 
                             w: Function,
@@ -375,7 +462,7 @@ def solve_with_continuation(problem: NonlinearProblem,
     if nu_start is None:
         if num_steps > 1:
             current_nu_value = nu_fem_constant.value
-        else:
+        else: # one step
             current_nu_value = nu_target
     else:
         current_nu_value = nu_start
