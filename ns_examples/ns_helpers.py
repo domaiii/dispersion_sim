@@ -98,8 +98,8 @@ def define_ns_ufl_forms(w: Function, V: FunctionSpace, nu: fem.Constant, enable_
 
     return F, J
 
-def create_noslip_dirichlet_bc(V_mixed: FunctionSpace, 
-                               boundary_marker: Callable[[np.ndarray], np.ndarray]) -> DirichletBC:
+def create_noslip_dirichlet_bc_mixed(V_mixed: FunctionSpace, 
+                                     marker: Callable[[np.ndarray], np.ndarray]) -> DirichletBC:
     """
     Creates a Dirichlet boundary condition for a no-slip velocity boundary. It is designed for use
     with a mixed Taylor-Hood (P2-P1) function space.
@@ -107,7 +107,7 @@ def create_noslip_dirichlet_bc(V_mixed: FunctionSpace,
     Args:
         V_mixed: The mixed function space (e.g., Taylor-Hood P2-P1) where
                  the velocity component is at index 0.
-        boundary_marker: A Python function that takes coordinates (x) and
+        marker: A Python function that takes coordinates (x) and
                          returns a boolean array, marking the boundary's location.
 
     Returns:
@@ -119,18 +119,41 @@ def create_noslip_dirichlet_bc(V_mixed: FunctionSpace,
     zero_velocity_func = fem.Function(V_velocity_collapsed)
     zero_velocity_func.x.array[:] = 0.0
     
-    boundary_dofs = fem.locate_dofs_geometrical((V_velocity_sub, V_velocity_collapsed), boundary_marker)
+    boundary_dofs = fem.locate_dofs_geometrical((V_velocity_sub, V_velocity_collapsed), marker)
     
     return fem.dirichletbc(zero_velocity_func, boundary_dofs, V_velocity_sub)
 
-def velocity_profile_bc(
+def create_noslip_dirichlet_bc(V: FunctionSpace, 
+                               marker: Callable[[np.ndarray], np.ndarray]) -> DirichletBC:
+    """
+    Creates a Dirichlet boundary condition for a no-slip velocity boundary. It is designed for use
+    with a velocity function space.
+
+    Args:
+        V: The velocity function space.
+        marker: A Python function that takes coordinates (x) and
+                         returns a boolean array, marking the boundary's location.
+
+    Returns:
+        A DirichletBC object for the velocity, setting it to zero on the marked boundary.
+    """
+
+    zero_velocity_func = fem.Function(V)
+    zero_velocity_func.x.array[:] = 0.0
+    
+    boundary_dofs = fem.locate_dofs_geometrical(V, marker)
+
+    return fem.dirichletbc(zero_velocity_func, boundary_dofs)
+
+
+def velocity_profile_bc_mixed(
     V_mixed: FunctionSpace,
     marker: Callable[[np.ndarray], np.ndarray],
     velocity_profile: Callable[[np.ndarray], np.ndarray],
     component_index: int = 0,
 ) -> DirichletBC:
     """
-    Creates a Dirichlet boundary condition for a velocity profile.
+    Creates a Dirichlet boundary condition for a velocity profile for a mixed function space.
 
     Args:
         V_mixed: The mixed function space.
@@ -149,14 +172,37 @@ def velocity_profile_bc(
 
     return fem.dirichletbc(inflow_func, inlet_dofs, V_velocity_sub)
 
-def constant_pressure_bc(
+def velocity_profile_bc(
+    V: FunctionSpace,
+    marker: Callable[[np.ndarray], np.ndarray],
+    velocity_profile: Callable[[np.ndarray], np.ndarray],
+) -> DirichletBC:
+    """
+    Creates a Dirichlet boundary condition for a velocity profile.
+
+    Args:
+        V: The velocity function space.
+        marker: A function that marks the affected boundary.
+        velocity_profile: A function that defines the velocity profile at the affected boundary.
+
+    Returns:
+        A DirichletBC object for the inflow.
+    """
+    inflow_func = fem.Function(V)
+    inflow_func.interpolate(velocity_profile)
+    inlet_dofs = fem.locate_dofs_geometrical(V, marker)
+
+    return fem.dirichletbc(inflow_func, inlet_dofs)
+
+
+def constant_pressure_bc_mixed(
     V_mixed: FunctionSpace,
     outflow_marker: Callable[[np.ndarray], np.ndarray],
     pressure_value: ScalarType = ScalarType(0.0),
     component_index: int = 1,  # Pressure is usually the second component
 ) -> DirichletBC:
     """
-    Creates a Dirichlet boundary condition for an outflow.
+    Creates a Dirichlet boundary condition for an outflow in a mixed function space.
 
     Args:
         V_mixed: The mixed function space.
@@ -175,7 +221,29 @@ def constant_pressure_bc(
     
     return fem.dirichletbc(pressure_func, outlet_dofs, V_pressure_sub)
 
-def pressure_profile_bc(
+def constant_pressure_bc(
+    V: FunctionSpace,
+    outflow_marker: Callable[[np.ndarray], np.ndarray],
+    pressure_value: ScalarType = ScalarType(0.0),
+) -> DirichletBC:
+    """
+    Creates a Dirichlet boundary condition for an outflow.
+
+    Args:
+        V: The pressure function space.
+        outflow_marker: A function that marks the outflow boundary.
+        pressure_value: The pressure value to set at the outflow (default: 0.0).
+
+    Returns:
+        A DirichletBC object for the outflow.
+    """
+    pressure_func = fem.Function(V)
+    pressure_func.x.array[:] = pressure_value
+    outlet_dofs = fem.locate_dofs_geometrical(V, outflow_marker)
+    
+    return fem.dirichletbc(pressure_func, outlet_dofs)
+
+def pressure_profile_bc_mixed(
     V_mixed: FunctionSpace,
     marker: Callable[[np.ndarray], np.ndarray],
     pressure_profile: Callable[[np.ndarray], np.ndarray],
@@ -546,7 +614,7 @@ if __name__ == "__main__":
     def outflow(x: np.ndarray) -> np.ndarray:
         return np.isclose(x[0], x_lim)
 
-    def inflow_velocity_profile(x: np.ndarray) -> np.ndarray:
+    def inflow_profile(x: np.ndarray) -> np.ndarray:
         ux_val = 4.0 * (y_lim - x[1]) * x[1] / y_lim**2
         return np.stack((ux_val, np.zeros_like(x[1])))
     
@@ -558,7 +626,7 @@ if __name__ == "__main__":
         # return np.stack((ux_val, np.zeros_like(x[1])))
     
     bc_no_slip = create_noslip_dirichlet_bc(V, no_slip_bdry)
-    bc_in = velocity_profile_bc(V, inflow, inflow_velocity_profile)
+    bc_in = velocity_profile_bc(V, inflow, inflow_profile)
     bc_out = constant_pressure_bc(V, outflow)
     
     bcs = [bc_in, bc_no_slip, bc_out]
