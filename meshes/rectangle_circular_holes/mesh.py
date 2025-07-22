@@ -1,6 +1,7 @@
-import meshio
 import gmsh
 import pygmsh
+
+from pathlib import Path
 
 resolution = 0.02
 
@@ -12,6 +13,9 @@ r1 = 0.1
 
 c2 = [1.7, 0.5, 0]
 r2 = 0.2
+
+meshpath = Path(__file__).parent
+msh_file = meshpath / "mesh.msh"
 
 geometry = pygmsh.geo.Geometry()
 model = geometry.__enter__()
@@ -46,6 +50,6 @@ model.add_physical(circle1.curve_loop.curves, "Obstacle1")
 model.add_physical(circle2.curve_loop.curves, "Obstacle2")
 
 geometry.generate_mesh(dim=2)
-gmsh.write("2D_circular_obstacles.msh")
+gmsh.write(str(msh_file))
 gmsh.clear()
 geometry.__exit__()

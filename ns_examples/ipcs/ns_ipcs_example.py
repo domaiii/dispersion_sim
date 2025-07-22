@@ -14,8 +14,7 @@ from petsc4py import PETSc
 from ufl import (FacetNormal, Identity, TestFunction, TrialFunction,
                  div, dot, ds, dx, inner, lhs, nabla_grad, rhs, sym)
 
-from ns_helpers import (create_2d_mesh_rect, 
-                        create_noslip_dirichlet_bc, 
+from ns_helpers import (create_noslip_dirichlet_bc, 
                         constant_pressure_bc, 
                         velocity_profile_bc)
 
@@ -25,7 +24,8 @@ y_lim = 100.0
 x_res = 50
 y_res = 25
 
-domain = create_2d_mesh_rect(x_lim, y_lim, x_res, y_res, cell_type=mesh.CellType.triangle)
+pts = ((0.0, 0.0), (x_lim, y_lim))
+domain = mesh.create_rectangle(MPI.COMM_WORLD, pts, (x_res, y_res), mesh.CellType.triangle)
 
 # Spaces
 V = fem.functionspace(domain, element("Lagrange", domain.basix_cell(), 2, shape=(2,)))
