@@ -20,7 +20,7 @@ domain, cell_tags, facet_tags = io.gmshio.read_from_msh(meshfile, MPI.COMM_WORLD
 V = fem.functionspace(domain, element("CG", domain.basix_cell(), 1))
 
 # Parameters
-D_phys = fem.Constant(domain, 2.1e-5)
+D_phys = fem.Constant(domain, 1.0)
 theta = fem.Constant(domain, 1.0)
 Pe = fem.Constant(domain, 1e2)
 t_end = 10 
