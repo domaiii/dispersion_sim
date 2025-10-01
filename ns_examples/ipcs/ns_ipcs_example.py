@@ -14,7 +14,7 @@ from petsc4py import PETSc
 from ufl import (FacetNormal, Identity, TestFunction, TrialFunction,
                  div, dot, ds, dx, inner, lhs, nabla_grad, rhs, sym)
 
-from ns_helpers import (create_noslip_dirichlet_bc, 
+from ns_examples.ipcs.ns_helpers import (create_noslip_dirichlet_bc, 
                         constant_pressure_bc, 
                         velocity_profile_bc)
 

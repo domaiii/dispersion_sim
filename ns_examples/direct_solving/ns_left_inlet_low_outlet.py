@@ -61,6 +61,6 @@ if __name__ == "__main__":
     solver = setup_newton_solver(problem, max_iterations=50, ksp_type=KSP.Type.GMRES, 
                                  pc_type=PETSc.PC.Type.HYPRE)
     
-    solve_adaptive_continuation(problem, solver, w, nu, nu_target=1.49e-5, nu_start=1.0)
+    solve_adaptive_continuation(problem, solver, w, nu, nu_target=1.0e-4, nu_start=1.0)
 
     u_vis, p_vis = save_solution_for_visualization(w, domain, output_dir_path="./output_results")
