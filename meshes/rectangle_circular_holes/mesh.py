@@ -56,10 +56,9 @@ model.synchronize()
 
 volume_marker = 6
 model.add_physical([plane_surface], "Volume")
-model.add_physical([boundary_lines[5]], "Inflow")
-model.add_physical([boundary_lines[2]], "Outflow")
-model.add_physical([boundary_lines[0], boundary_lines[1], 
-                    boundary_lines[3], boundary_lines[4]], "Walls")
+model.add_physical([boundary_lines[5], boundary_lines[0]], "Inflow")
+model.add_physical([boundary_lines[2], boundary_lines[3]], "Outflow")
+model.add_physical([boundary_lines[1], boundary_lines[4]], "Walls")
 model.add_physical(circle1.curve_loop.curves, "Obstacle1")
 model.add_physical(circle2.curve_loop.curves, "Obstacle2")
 model.add_physical(circle3.curve_loop.curves, "Obstacle3")
