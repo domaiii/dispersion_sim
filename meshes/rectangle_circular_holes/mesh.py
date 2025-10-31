@@ -6,7 +6,7 @@ from pathlib import Path
 L = 2.0
 H = 1.0
 
-resolution = 0.04 * H
+resolution = 0.06 * H
 
 c1 = [0.2 * L, 0.7 * H, 0]
 r1 = 0.15 * H
