@@ -16,12 +16,26 @@ from petsc4py import PETSc
 
 class Visualizer2D:
 
-    def __init__(self, function_space: fem.FunctionSpace):
+    def __init__(self, function_space: fem.FunctionSpace, window_size=(1600, 900), font_size=16):
         self.function_space = function_space
-
         self.topology, self.cell_type, self.geom = plot.vtk_mesh(function_space)
         self.grid = pv.UnstructuredGrid(self.topology, self.cell_type, self.geom)
-        self.plotter = pv.Plotter()
+
+        self.plotter = pv.Plotter(window_size=window_size)
+        self._configure_style(font_size)
+
+    def _configure_style(self, font_size):
+        """Setzt einheitliche Fonts und Colorbar-Stil."""
+        self.scalar_bar_args = dict(
+            title_font_size=font_size + 2,
+            label_font_size=font_size,
+            n_labels=5,
+            position_x=0.3,
+            position_y=0.05,
+            width=0.4,
+            height=0.03,
+            fmt="%.2f"
+        )
 
     def add_scalar_field(self, name: str, scalar_func: fem.Function, cmap: str = "viridis"):
         value_size = scalar_func.x.block_size
@@ -33,8 +47,9 @@ class Visualizer2D:
             self.grid.copy(),
             scalars=name,
             cmap=cmap,
-            scalar_bar_args={"title": name},
+            scalar_bar_args={**self.scalar_bar_args, "title": name},
         )
+
     def add_vector_field(self, name: str, vector_func: fem.Function, factor: float = 0.15):
         vec2d = vector_func.x.array.reshape(-1, 2)
         vec3d = np.hstack((vec2d, np.zeros((vec2d.shape[0], 1))))
@@ -42,22 +57,22 @@ class Visualizer2D:
 
         subset = self.grid.extract_points(np.arange(self.grid.n_points))
         glyphs = subset.glyph(orient=name, scale=name, factor=factor)
-        self.plotter.add_mesh(glyphs, cmap="viridis", scalar_bar_args={"title": name})
+        self.plotter.add_mesh(glyphs, cmap="viridis", scalar_bar_args={**self.scalar_bar_args, "title": name})
 
     def add_points(self, coords, color="red", size=10, label="Measurements"):
         pts = pv.PolyData(coords)
         self.plotter.add_mesh(pts, color=color, point_size=size, label=label)
 
-    def add_background_mesh(self, opacity = 0.3, gridlines = False):
+    def add_background_mesh(self, opacity=0.3, gridlines=False):
         self.plotter.add_mesh(self.grid, color="gray", opacity=opacity, show_edges=gridlines)
 
     def show(self, title=None, zoom=1.0):
-        # self.add_background_mesh()
         self.plotter.view_xy()
         if title:
-            self.plotter.add_text(title, position="upper_edge", font_size=12)
+            self.plotter.add_text(title, position="upper_edge", font_size=16, color="black")
         self.plotter.zoom_camera(zoom)
         self.plotter.show()
+
 
 class AirflowEstimator:
     def __init__(self,
