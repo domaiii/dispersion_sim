@@ -68,6 +68,7 @@ class Visualizer2D:
 
     def show(self, title=None, zoom=1.0):
         self.plotter.view_xy()
+        self.plotter.add_axes()
         if title:
             self.plotter.add_text(title, position="upper_edge", font_size=16, color="black")
         self.plotter.zoom_camera(zoom)
@@ -249,14 +250,15 @@ class AirflowEstimator:
         Rdiv_u = div(u)
         Rdiv_v = div(v)
 
-        a_pde = (beta * (inner(Rmom_u, Rmom_v) + Rdiv_u * Rdiv_v)
-                + gamma * inner(grad(u), grad(v))) * dx
+        a_pde = (beta * (inner(Rmom_u, Rmom_v) + Rdiv_u * Rdiv_v)) * dx
+        a_reg = (gamma * inner(grad(u), grad(v))) * dx # regularization with ||grad(u)||
+        #a_reg = (gamma * inner(u, v)) * dx # regularization with ||u||
 
         zero_vec = fem.Constant(domain, PETSc.ScalarType((0.0,) * domain.geometry.dim))
-        L_pde = inner(zero_vec, v) * dx
+        L = inner(zero_vec, v) * dx
 
         # --- Assemble mit BCs
-        aF, LF = fem.form(a_pde), fem.form(L_pde)
+        aF, LF = fem.form(a_pde + a_reg), fem.form(L)
         A = assemble_matrix(aF, bcs=self.bcs); A.assemble()
         b = assemble_vector(LF)
         fem.apply_lifting(b, [aF], bcs=[self.bcs])

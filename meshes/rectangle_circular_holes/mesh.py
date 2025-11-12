@@ -3,8 +3,8 @@ import pygmsh
 
 from pathlib import Path
 
-L = 2.0
-H = 1.0
+L = 20.0
+H = 10.0
 
 resolution = 0.06 * H
 

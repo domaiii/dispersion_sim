@@ -12,8 +12,8 @@ from airflow_estimator import AirflowEstimator, Visualizer2D
 bpfile   = Path("/home/dominik/git/dispersion_sim/wind_data/airflow_picard.bp")
 meshfile = Path("/home/dominik/git/dispersion_sim/meshes/rectangle_circular_holes/mesh.msh")
 
-est = AirflowEstimator.from_file(bpfile, fun_name="velocity_H2", meshtags_name="facet_tags", p=50)
-est.set_weights(kin_v=1.5e-4, misfit=1e0, pde_err=1e3, reg=1e-3)
+est = AirflowEstimator.from_file(bpfile, fun_name="velocity_H2", meshtags_name="facet_tags", p=100, seed=15)
+est.set_weights(kin_v=1.5e-3, misfit=1e2, pde_err=1.0, reg=1e-3)
 
 # Boundary conditions
 V = est.V
@@ -54,16 +54,16 @@ result = est.solve(maxit=3)
 
 m_coords = est.get_measurement_coordinates()
 
-# vis = Visualizer2D(V, window_size=(3200, 1800), font_size=40)
-# vis.add_background_mesh()
-# vis.add_vector_field("Airflow Estimation", result.sub(0).collapse())
-# vis.add_points(m_coords, "red", size=30, label="Measurements")
-# vis.show(zoom=1.4)
+vis = Visualizer2D(V, window_size=(3200, 1800), font_size=40)
+vis.add_background_mesh()
+vis.add_vector_field("Measurements from ground truth", est.ground_truth.sub(0).collapse(), factor=1.0)
+vis.add_points(m_coords, "red", size=30, label="Measurements")
+vis.show(zoom=1.4)
 
-# vis = Visualizer2D(V, window_size=(3200, 1800), font_size=40)
-# vis.add_background_mesh()
-# vis.add_vector_field("Ground truth airflow (forward simulation)", est.ground_truth.sub(0).collapse(), 0.15)
-# vis.show(zoom=1.4)
+vis = Visualizer2D(V, window_size=(3200, 1800), font_size=40)
+vis.add_background_mesh()
+vis.add_vector_field("Airflow Estimation", result.sub(0).collapse(), factor=1.0)
+vis.show(zoom=1.4)
 
 # --- Vergleiche: geschätztes vs. wahres Strömungsfeld ---
 u_true = est.ground_truth.sub(0).collapse()
