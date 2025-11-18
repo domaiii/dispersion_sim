@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from mpi4py import MPI
 from dolfinx import fem
 from pathlib import Path
-from airflow_estimator import AirflowEstimator, Visualizer2D
+from tools.airflow_estimator import AirflowEstimator, Visualizer2D
 
 # Example usage 
 bpfile   = Path("/home/dominik/git/dispersion_sim/wind_data/airflow_picard.bp")

@@ -3,14 +3,12 @@ import warnings
 import adios4dolfinx
 import numpy as np
 import pyvista as pv
-from typing import Union
 
 from mpi4py import MPI
 from pathlib import Path
 from ufl import grad, div, dot, inner, dx
 from basix.ufl import element, mixed_element
-from scipy.spatial import KDTree
-from dolfinx import fem, plot, io, mesh
+from dolfinx import fem, plot, mesh
 from dolfinx.fem.petsc import assemble_vector, assemble_matrix
 from petsc4py import PETSc
 
