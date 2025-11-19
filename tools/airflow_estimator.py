@@ -79,9 +79,9 @@ class AirflowEstimator:
                  w_measured: fem.Function,
                  measurement_ids_W,
                  kin_viscosity: float = 1.5e-4,
-                 weight_misfit: float = 1e3,
-                 weight_pde_error: float = 1e2,
-                 weight_reg: float = 1e-3):
+                 weight_misfit: float = 1.0,
+                 weight_pde_error: float = 1.0,
+                 weight_reg: float = 1e-2):
         """
         Initialisiert den Estimator OHNE Boundary Conditions.
         Alle Funktionsräume werden aufgebaut, damit man sie direkt für BCs nutzen kann.

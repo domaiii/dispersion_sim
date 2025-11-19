@@ -56,7 +56,6 @@ class GasSourceEstimator:
 
         # Optional ground truth
         self.f_true = None
-        self.c_true = None
 
     def set_ground_truth(self, f_true: fem.Function):
         if f_true.function_space != self.scalar_space:
@@ -64,36 +63,42 @@ class GasSourceEstimator:
         
         self.f_true = fem.Function(self.scalar_space, name="f_true")
         self.f_true.x.array[:] = f_true.x.array.copy()
-        self.compute_ground_truth_concentration()
+        self.get_ground_truth_concentration()
 
         return self.f_true
     
-    def compute_ground_truth_concentration(self):
-        """Compute gas source distribution based on ground truth source and given wind field."""
+    def get_ground_truth_concentration(self):
         if self.f_true is None:
-            raise RuntimeError("No ground truth source. Use set_ground_truth(...). first")
-        
+            raise RuntimeError("No ground truth source has been set.")
+
+        # Backup 
         backup = self.source.x.array.copy()
+
+        # Use true source
         self.source.x.array[:] = self.f_true.x.array
-        
-        self.c_true = self.solve_forward()
-        
+        forward_problem = self._build_forward_problem()
+        c_true = forward_problem.solve()
+
+        # Restore actual inversion
         self.source.x.array[:] = backup
-        
-        return self.c_true
+
+        return c_true
     
     def generate_measurements_from_ground_truth(self, p: int, seed: int = 1):
-        if self.c_true is None:
-            raise RuntimeError("Compute ground truth concentration with " \
-            "compute_ground_truth_concentration() first.")
-        
+        if self.f_true is None:
+            raise RuntimeError("Set ground truth f_true first using set_ground_truth().")
+
+        # Always recompute GT concentration cleanly
+        c_true = self.get_ground_truth_concentration()
+
         rng = np.random.default_rng(seed)
-        n = self.c_true.x.array.size
-        
+        n = c_true.x.array.size
+
         m_ids = rng.choice(np.arange(n), size=p, replace=False)
-        m_values = self.c_true.x.array[m_ids].copy()
+        m_values = c_true.x.array[m_ids].copy()
+
         self.set_measurements(m_ids, m_values)
-        
+
         return m_ids, m_values
 
     def _build_default_bc(self):
@@ -149,7 +154,6 @@ class GasSourceEstimator:
         # Depend on wind field as well
         self.m_ids = None
         self.m = None
-        self.c_true = None
 
     def solve_L1(self,
                  gamma_reg: float = 1e-2,
@@ -200,6 +204,7 @@ class GasSourceEstimator:
             while True:
                 y = f_old - alpha_local * gradJ
                 f.x.array[:] = np.sign(y) * np.maximum(np.abs(y) - alpha_local * gamma_reg, 0.0)
+                f.x.array[:] = np.maximum(f.x.array, 0.0)
 
                 c_trial = self.solve_forward()
                 mis_trial = compute_misfit(c_trial, f)
@@ -285,7 +290,7 @@ class GasSourceEstimator:
             alpha_local = alpha
             while True:
                 f.x.array[:] = f_old - alpha_local * gradJ
-
+                f.x.array[:] = np.maximum(f.x.array, 0.0)
                 c_trial = self.solve_forward()
                 mis_trial = compute_misfit(c_trial, f)
 
