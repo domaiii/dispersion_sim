@@ -203,6 +203,36 @@ class AirflowEstimator:
         else:
             self.bcs.append(bc)
 
+    def reset_random_measurements(self, p: int, seed: int | None = None):
+        """
+        Creates new random measurement set overwriting self.measurement_ids_W and selfw_measured.
+        Resets the solution self.w_final.
+        Benötigt, dass eine ground_truth-Funktion gesetzt wurde.
+        """
+        if self.ground_truth is None:
+            raise ValueError("No ground truth set. Use set_ground_truth() first.")
+
+        rng = np.random.default_rng(seed)
+
+        coords_V = self.V.tabulate_dof_coordinates()
+        ndofs = len(coords_V)
+
+        sample_ids = rng.choice(ndofs, size=p, replace=False)
+
+        x_ids = sample_ids * 2
+        y_ids = sample_ids * 2 + 1
+        velocity_ids_V = np.stack((x_ids, y_ids)).T.flatten()
+
+        # Mapping in W
+        measurement_ids_W = self.V_to_W[velocity_ids_V]
+
+        self.w_measured.x.array[:] = 0.0
+        self.w_measured.x.array[measurement_ids_W] = \
+            self.ground_truth.x.array[measurement_ids_W]
+
+        self.measurement_ids_W = measurement_ids_W.astype(np.int32)
+        self.w_final = None
+
     def set_ground_truth(self, funW: fem.Function):
         if self.ground_truth:
             warnings.warn("Overwriting ground truth data.")

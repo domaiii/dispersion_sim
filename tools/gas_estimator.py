@@ -69,6 +69,7 @@ class GasSourceEstimator:
         return self.f_true
     
     def compute_ground_truth_concentration(self):
+        """Compute gas source distribution based on ground truth source and given wind field."""
         if self.f_true is None:
             raise RuntimeError("No ground truth source. Use set_ground_truth(...). first")
         
@@ -132,6 +133,23 @@ class GasSourceEstimator:
     def solve_forward(self) -> fem.Function:
         self.c = self.forward_problem.solve()
         return self.c
+    
+    def reinitialize(self, wind: fem.Function):
+        """
+        Update wind field and all members/structures depending on it to allow reusing the instance
+        for multiple experiments without creating a new GasSourceEstimator every time.
+        """
+        # reset
+        self.wind_field = wind
+        self.tau = self._build_supg_parameters()
+
+        self.forward_problem = self._build_forward_problem()
+        self.adjoint_problem = self._build_adjoint_problem()
+
+        # Depend on wind field as well
+        self.m_ids = None
+        self.m = None
+        self.c_true = None
 
     def solve_L1(self,
                  gamma_reg: float = 1e-2,
