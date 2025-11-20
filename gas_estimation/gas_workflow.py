@@ -1,12 +1,10 @@
 import numpy as np
-import dolfinx
-import time
 import adios4dolfinx
 from pathlib import Path
 from dolfinx import mesh, fem, io
 from mpi4py import MPI
 from basix.ufl import element
-from tools.airflow_estimator import Visualizer2D
+from tools.visualizer import Visualizer2D
 from tools.gas_estimator import GasSourceEstimator
 
 wind_file = Path("/home/dominik/git/dispersion_sim/wind_data/airflow_ipcs.bp")

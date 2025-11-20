@@ -4,13 +4,15 @@ import gmsh
 from mpi4py import MPI
 
 from dolfinx import fem
-from tools.airflow_estimator import AirflowEstimator, Visualizer2D
+from tools.airflow_estimator import AirflowEstimator
+from tools.visualizer import Visualizer2D
 from tools.gas_estimator import GasSourceEstimator
 
+WDIR = Path(__file__).parent.resolve()
 
 # 1. Wind-Mesh & Ground-Truth-Wind laden + AirflowEstimator bauen
-bpfile   = Path("/home/dominik/git/dispersion_sim/wind_data/airflow_ipcs.bp")
-meshfile = Path("/home/dominik/git/dispersion_sim/meshes/rectangle_circular_holes/mesh.msh")
+bpfile   = WDIR / "airflow_ipcs.bp"
+meshfile = WDIR / "../experiment_mesh/mesh.msh"
 
 air = AirflowEstimator.from_file(
     bpfile,
@@ -88,7 +90,7 @@ print("Estimated max source value:", gas.estimated_source_max_value())
 vis = Visualizer2D(gas.scalar_space)
 
 # Hintergrund-Mesh (optional)
-vis.add_background_mesh(opacity=0.1)
+# vis.add_background_mesh(opacity=0.1)
 
 # Ground truth source
 vis.add_scalar_field("f_true", gas.f_true)
@@ -115,7 +117,7 @@ vis.show(title="Gas Source: True vs Estimated", zoom=1.2)
 vis2 = Visualizer2D(gas.scalar_space, font_size=26)
 
 # Estimated source field
-vis2.add_scalar_field("Gas Distribution", gas.get_ground_truth_concentration(), cmap="viridis")
+vis2.add_scalar_field("Gas Distribution", gas.get_ground_truth_concentration())
 
 # Measurement point coordinates
 meas_coords = gas.scalar_space.tabulate_dof_coordinates()[gas.m_ids]
