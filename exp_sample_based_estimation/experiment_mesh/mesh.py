@@ -59,11 +59,11 @@ model.add_physical([plane_surface], "Volume")
 model.add_physical([boundary_lines[5], boundary_lines[0]], "Inflow")
 model.add_physical([boundary_lines[2], boundary_lines[3]], "Outflow")
 model.add_physical([boundary_lines[1], boundary_lines[4]], "Walls")
-model.add_physical(circle1.curve_loop.curves, "Obstacle1")
-model.add_physical(circle2.curve_loop.curves, "Obstacle2")
-model.add_physical(circle3.curve_loop.curves, "Obstacle3")
-model.add_physical(circle4.curve_loop.curves, "Obstacle4")
-model.add_physical(circle5.curve_loop.curves, "Obstacle5")
+model.add_physical(circle1.curve_loop.curves +
+                   circle2.curve_loop.curves +
+                   circle3.curve_loop.curves +
+                   circle4.curve_loop.curves +
+                   circle5.curve_loop.curves, "Obstacles")
 
 geometry.generate_mesh(dim=2)
 gmsh.write(str(msh_file))

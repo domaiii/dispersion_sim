@@ -37,7 +37,7 @@ domain = air.domain
 # No-slip BC
 u_D_no_slip = fem.Function(air.V)
 u_D_no_slip.x.array[:] = 0.0
-walls = ["Walls", "Obstacle1", "Obstacle2", "Obstacle3", "Obstacle4", "Obstacle5"]
+walls = ["Walls", "Obstacles"]
 wall_facets = np.concatenate([facet_tags.find(name_to_id[name]) for name in walls])
 dofs_wall = fem.locate_dofs_topological((air.W0, air.V), domain.topology.dim-1, wall_facets)
 bc_no_slip = fem.dirichletbc(u_D_no_slip, dofs_wall, air.W0)
