@@ -97,8 +97,13 @@ class SingleExperiment:
 
         self.gamma_reg = gamma_reg
 
+    def run_L1(self, verbose=True):
+        return self._run(reg="L1", verbose=verbose)
 
-    def run(self):
+    def run_L2(self, verbose=True):
+        return self._run(reg="L2", verbose=verbose)
+    
+    def _run(self, reg: str, verbose=True):
         air = self.air_est
         gas = self.gas_est
 
@@ -117,8 +122,13 @@ class SingleExperiment:
         c_true = gas.get_ground_truth_concentration()
         gas.reset_random_measurements(self.p_gas, seed=self.gas_seed)
 
-        # source reconstruction
-        f_est = gas.solve_L1(gamma_reg=self.gamma_reg, verbose=True)
+        if reg == "L1":
+            f_est = gas.solve_L1(gamma_reg=self.gamma_reg, verbose=verbose)
+        elif reg == "L2":
+            f_est = gas.solve_L2(gamma_reg=self.gamma_reg, verbose=verbose)
+        else:
+            raise ValueError(f"Unknown regularization type: {reg}")
+
         c_est = gas.c_est
 
         # ---------------- Error metrics ----------------
@@ -134,8 +144,8 @@ class SingleExperiment:
         # ---------------- Build result object ----------------
         return SingleExperimentResult(
             true_loc, est_loc, loc_error,
-            f_true, f_est,
-            u_true, u_est,
-            c_true, c_est,
+            f_true.copy(), f_est.copy(),
+            u_true.copy(), u_est.copy(),
+            c_true.copy(), c_est.copy(),
             gas_coords, wind_coords
         )

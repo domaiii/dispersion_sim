@@ -186,175 +186,159 @@ class GasSourceEstimator:
         self.m_ids = None
         self.m = None
 
-    def solve_L1(self,
-                 gamma_reg: float = 1e-2,
-                 max_it: int = 50,
-                 alpha0: float = 1.0,
-                 tol_rel: float = 1e-4,
-                 tol_grad: float = 1e-4,
-                 c_arm: float = 1e-3,
-                 rho: float = 0.5,
-                 verbose: bool = True):
-        
-        if self.m_ids is None or self.m is None:
-            raise RuntimeError("No measurements set. Call set_measurements(...) first.")
+    # def solve_L1(self, **kw):
+    #     return self._solve_inverse("L1", **kw)
+
+    # def solve_L2(self, **kw):
+    #     return self._solve_inverse("L2", **kw)
+
+    def solve_L1(
+        self,
+        gamma_reg: float = 1e-2,
+        max_it: int = 50,
+        alpha0: float = 1.0,
+        tol_rel: float = 1e-4,
+        tol_grad: float = 1e-4,
+        c_arm: float = 1e-3,
+        rho: float = 0.5,
+        verbose: bool = True,
+    ):
+        return self._solve_inverse(
+            reg="L1",
+            gamma_reg=gamma_reg,
+            max_it=max_it,
+            alpha0=alpha0,
+            tol_rel=tol_rel,
+            tol_grad=tol_grad,
+            c_arm=c_arm,
+            rho=rho,
+            verbose=verbose,
+        )
+
+
+    def solve_L2(
+        self,
+        gamma_reg: float = 1e-2,
+        max_it: int = 200,
+        alpha0: float = 1.0,
+        tol_rel: float = 1e-7,
+        tol_grad: float = 1e-8,
+        c_arm: float = 1e-3,
+        rho: float = 0.5,
+        verbose: bool = True,
+    ):
+        return self._solve_inverse(
+            reg="L2",
+            gamma_reg=gamma_reg,
+            max_it=max_it,
+            alpha0=alpha0,
+            tol_rel=tol_rel,
+            tol_grad=tol_grad,
+            c_arm=c_arm,
+            rho=rho,
+            verbose=verbose,
+        )
+
+    def _solve_inverse(self,
+                    reg,
+                    gamma_reg=1e-2,
+                    max_it=50,
+                    alpha0=1.0,
+                    tol_rel=1e-4,
+                    tol_grad=1e-4,
+                    c_arm=1e-3,
+                    rho=0.5,
+                    verbose=True):
+
+        if self.m_ids is None:
+            raise RuntimeError("No measurements set.")
 
         m_ids = self.m_ids
         m = self.m
         f = self.source_est
-        residual = self.residual
+        r = self.residual
 
-        f.x.array[:] = 0.0  # Start at f=0
-
-        misfit_hist = []
-        alpha_hist = []
+        f.x.array[:] = 0.0
         alpha = alpha0 / rho
 
-        def compute_misfit(c_func: fem.Function, f_func: fem.Function):
-            r = c_func.x.array[m_ids] - m
-            return np.dot(r, r) + 0.5 * gamma_reg * np.sum(np.abs(f_func.x.array))
+        misfits = []
+        alphas = []
 
+        # ----- choose L1 or L2 templates -----
+        if reg == "L1":
+            misfit = lambda c: np.dot(c.x.array[m_ids]-m, c.x.array[m_ids]-m) \
+                            + 0.5*gamma_reg*np.sum(np.abs(f.x.array))
+            grad   = lambda adj: -adj.x.array
+            prox   = lambda f_old, a, g: np.maximum(
+                            0.0,
+                            np.sign(f_old-a*g) *
+                            np.maximum(np.abs(f_old-a*g)-a*gamma_reg, 0.0)
+                        )
+
+        elif reg == "L2":
+            misfit = lambda c: 0.5*np.dot(c.x.array[m_ids]-m, c.x.array[m_ids]-m) \
+                            + 0.5*gamma_reg*np.dot(f.x.array, f.x.array)
+            grad   = lambda adj: -adj.x.array + gamma_reg*f.x.array
+            prox   = lambda f_old, a, g: np.maximum(0.0, f_old - a*g)
+
+        else:
+            raise ValueError("reg must be 'L1' or 'L2'")
+
+        # --------- main loop ----------
         for it in range(max_it):
 
             alpha /= rho
-
             c = self.solve_forward()
-            mis = compute_misfit(c, f)
+            J = misfit(c)
 
-            residual.x.array[:] = 0.0
-            residual.x.array[m_ids] = -(c.x.array[m_ids] - m)
+            # build adjoint RHS
+            r.x.array[:] = 0.0
+            r.x.array[m_ids] = -(c.x.array[m_ids]-m)
             adj = self.adjoint_problem.solve()
 
-            gradJ = -adj.x.array
-            grad_norm = np.linalg.norm(gradJ)
-
+            g = grad(adj)
+            gnorm = np.linalg.norm(g)
             f_old = f.x.array.copy()
 
             # Armijo
-            alpha_local = alpha
+            a = alpha
             while True:
-                y = f_old - alpha_local * gradJ
-                f.x.array[:] = np.sign(y) * np.maximum(np.abs(y) - alpha_local * gamma_reg, 0.0)
-                f.x.array[:] = np.maximum(f.x.array, 0.0)
+                f.x.array[:] = prox(f_old, a, g)
 
                 c_trial = self.solve_forward()
-                mis_trial = compute_misfit(c_trial, f)
+                J_trial = misfit(c_trial)
 
-                if mis_trial <= mis - c_arm * alpha_local * grad_norm**2:
+                if J_trial <= J - c_arm * a * gnorm**2:
                     break
 
-                alpha_local *= rho
-                if alpha_local < 1e-10:
+                a *= rho
+                if a < 1e-12:
                     print("Step size too small.")
                     break
 
-            alpha = alpha_local
+            alpha = a
+            misfits.append(J_trial)
+            alphas.append(a)
 
-            misfit_hist.append(mis_trial)
-            alpha_hist.append(alpha)
+            if verbose and (it % 10 == 0 or it == max_it-1):
+                print(f"it {it:3d} mis={J:.3e} ||grad||={gnorm:.3e} a={alpha:.2e}")
 
-            if verbose and (it % 10 == 0 or it == max_it - 1):
-                print(f"it {it:3d} mis={mis:.3e} ||grad||={grad_norm:.3e} α={alpha:.2e}")
-
-            # Convergence criteria
-            if it > 1:
-                rel_change = abs(misfit_hist[-2] - misfit_hist[-1]) / max(1e-12, misfit_hist[-2])
-                if rel_change < tol_rel or grad_norm < tol_grad:
+            # stopping
+            if it > 2:
+                rel = abs(misfits[-2] - misfits[-1]) / max(1e-12, misfits[-2])
+                if rel < tol_rel or gnorm < tol_grad:
                     if verbose:
-                        print(f"Stopped at it {it}, rel_change={rel_change:.3e}")
+                        print(f"Stopped at it {it}, rel_change={rel:.3e}")
                     break
 
-        self.misfit_hist_L1 = np.array(misfit_hist)
-        self.alpha_hist_L1 = np.array(alpha_hist)
+        # save
         self.c_est = self.solve_forward()
-
-        return self.source_est
-
-    def solve_L2(self,
-                gamma_reg: float = 1e-2,
-                max_it: int = 200,
-                alpha0: float = 1.0,
-                tol_rel: float = 1e-7,
-                tol_grad: float = 1e-8,
-                c_arm: float = 1e-3,
-                rho: float = 0.5,
-                verbose: bool = True):
-
-        if self.m_ids is None or self.m is None:
-            raise RuntimeError("No measurements set. Use set_measurements(...) first.")
-
-        m_ids = self.m_ids
-        m = self.m
-        f = self.source_est
-        residual = self.residual
-
-        f.x.array[:] = 0.0
-
-        misfit_hist = []
-        alpha_hist = []
-
-        # Schrittweite starten
-        alpha = alpha0 / rho
-
-        def compute_misfit(c_func: fem.Function, f_func: fem.Function):
-            r = c_func.x.array[m_ids] - m
-            return 0.5 * np.dot(r, r) + 0.5 * gamma_reg * np.dot(f_func.x.array, f_func.x.array)
-
-        for it in range(max_it):
-
-            # Schrittweite für neue Iteration erhöhen
-            alpha /= rho
-
-            c = self.solve_forward()
-            mis = compute_misfit(c, f)
-
-            # Adjoint RHS
-            residual.x.array[:] = 0.0
-            residual.x.array[m_ids] = -(c.x.array[m_ids] - m)
-            adj = self.adjoint_problem.solve()
-
-            # Gradient
-            gradJ = -adj.x.array + gamma_reg * f.x.array
-            grad_norm = np.linalg.norm(gradJ)
-
-            f_old = f.x.array.copy()
-
-            # Local Armijo
-            alpha_local = alpha
-            while True:
-                f.x.array[:] = f_old - alpha_local * gradJ
-                f.x.array[:] = np.maximum(f.x.array, 0.0)
-                c_trial = self.solve_forward()
-                mis_trial = compute_misfit(c_trial, f)
-
-                if mis_trial <= mis - c_arm * alpha_local * grad_norm**2:
-                    break
-
-                alpha_local *= rho
-                if alpha_local < 1e-14:
-                    print("Step size too small.")
-                    break
-
-            # Übernommene Schrittweite für nächste Iteration merken
-            alpha = alpha_local
-
-            misfit_hist.append(mis_trial)
-            alpha_hist.append(alpha)
-
-            if verbose and (it % 10 == 0 or it == max_it - 1):
-                print(f"it {it:3d} mis={mis:.3e} ||grad||={grad_norm:.3e} α={alpha:.2e}")
-
-            # Convergence
-            if it > 1:
-                rel_change = abs(misfit_hist[-2] - misfit_hist[-1]) / max(1e-12, misfit_hist[-2])
-                if rel_change < tol_rel or grad_norm < tol_grad:
-                    if verbose:
-                        print(f"Stopped at it {it}, rel_change={rel_change:.3e}")
-                    break
-
-        self.misfit_hist_L2 = np.array(misfit_hist)
-        self.alpha_hist_L2 = np.array(alpha_hist)
-        self.c_est = self.solve_forward()
+        if reg == "L1":
+            self.misfit_hist_L1 = np.array(misfits)
+            self.alpha_hist_L1  = np.array(alphas)
+        else:
+            self.misfit_hist_L2 = np.array(misfits)
+            self.alpha_hist_L2  = np.array(alphas)
 
         return self.source_est
 

@@ -60,10 +60,11 @@ exp = SingleExperiment(
     amplitude=10.0
 )
 
-result = exp.run()
+result = exp.run_L1()
+result2 = exp.run_L2()
 
 # -------------------------------------------------------------
-# 4. Visualization
+# 4. Visualization (L1 result)
 # -------------------------------------------------------------
 
 vis = Visualizer2D(gas_new.scalar_space)
