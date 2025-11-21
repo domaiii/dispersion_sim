@@ -79,11 +79,22 @@ class Visualizer2D:
         self.plotter.add_mesh(glyphs, cmap="coolwarm", 
                               scalar_bar_args={**self.scalar_bar_args, "title": f"{name} Magnitude"})
 
-    def add_points(self, coords: np.ndarray, 
+    def add_points(self, coords, 
                    color: str | None = None, size: int | None = None, label: str | None = None):
         """
-        Adds points to the plot with an explicit label for the legend.
+        Add 2D or 3D point coordinates. Accepts list, tuple, or ndarray.
         """
+        # Convert list/tuple -> ndarray
+        coords = np.asarray(coords)
+
+        # Guarantee correct shape
+        if coords.ndim == 1:
+            coords = coords.reshape(1, -1)
+
+        # Convert to 3D if needed
+        if coords.shape[1] == 2:
+            coords = np.column_stack([coords, np.zeros(len(coords))])
+
         if size is None: size = 10
         if color is None: color = "red"
         
