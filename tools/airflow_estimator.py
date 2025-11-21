@@ -12,67 +12,6 @@ from dolfinx import fem, plot, mesh
 from dolfinx.fem.petsc import assemble_vector, assemble_matrix
 from petsc4py import PETSc
 
-class Visualizer2D:
-
-    def __init__(self, function_space: fem.FunctionSpace, window_size=(1600, 900), font_size=16):
-        self.function_space = function_space
-        self.topology, self.cell_type, self.geom = plot.vtk_mesh(function_space)
-        self.grid = pv.UnstructuredGrid(self.topology, self.cell_type, self.geom)
-
-        self.plotter = pv.Plotter(window_size=window_size)
-        self._configure_style(font_size)
-
-    def _configure_style(self, font_size):
-        """Setzt einheitliche Fonts und Colorbar-Stil."""
-        self.scalar_bar_args = dict(
-            title_font_size=font_size + 2,
-            label_font_size=font_size,
-            n_labels=5,
-            position_x=0.3,
-            position_y=0.05,
-            width=0.4,
-            height=0.03,
-            fmt="%.2f"
-        )
-
-    def add_scalar_field(self, name: str, scalar_func: fem.Function, cmap: str = "viridis"):
-        value_size = scalar_func.x.block_size
-        if value_size != 1:
-            raise ValueError(f"{name} is no scalar field (value_size={value_size}) — ignored.")
-
-        self.grid.point_data[name] = scalar_func.x.array
-        self.plotter.add_mesh(
-            self.grid.copy(),
-            scalars=name,
-            cmap=cmap,
-            scalar_bar_args={**self.scalar_bar_args, "title": name},
-        )
-
-    def add_vector_field(self, name: str, vector_func: fem.Function, factor: float = 0.15):
-        vec2d = vector_func.x.array.reshape(-1, 2)
-        vec3d = np.hstack((vec2d, np.zeros((vec2d.shape[0], 1))))
-        self.grid.point_data[name] = vec3d
-
-        subset = self.grid.extract_points(np.arange(self.grid.n_points))
-        glyphs = subset.glyph(orient=name, scale=name, factor=factor)
-        self.plotter.add_mesh(glyphs, cmap="viridis", scalar_bar_args={**self.scalar_bar_args, "title": name})
-
-    def add_points(self, coords, color="red", size=10, label="Measurements"):
-        pts = pv.PolyData(coords)
-        self.plotter.add_mesh(pts, color=color, point_size=size, label=label)
-
-    def add_background_mesh(self, opacity=0.3, gridlines=False):
-        self.plotter.add_mesh(self.grid, color="gray", opacity=opacity, show_edges=gridlines)
-
-    def show(self, title=None, zoom=1.0):
-        self.plotter.view_xy()
-        self.plotter.add_axes()
-        if title:
-            self.plotter.add_text(title, position="upper_edge", font_size=16, color="black")
-        self.plotter.zoom_camera(zoom)
-        self.plotter.show()
-
-
 class AirflowEstimator:
     def __init__(self,
                  domain: mesh,
@@ -109,23 +48,49 @@ class AirflowEstimator:
         self.w_final: fem.Function | None = None
         self.ground_truth: fem.Function | None = None
 
+        self._boundary_name_to_id: dict[str, int] = {}
+
     @classmethod
     def from_file(cls,
                   bp_path: Path,
+                  p: int,
+                  seed: int,
                   fun_name: str | None = "velocity",
                   meshtags_name: str | None = "facet_tags",
-                  p: int = 100,
-                  seed: int = 5):
-        
+                  meshfile: Path | None = None):
+        """
+        Construct estimator from ADIOS bp file.
+
+        Parameters
+        ----------
+        bp_path : Path
+            ADIOS .bp file containing mesh, velocity, facet tags.
+        p : int
+            Number of velocity measurement points.
+        seed : int
+            Random seed for measurement sampling.
+        fun_name : str
+            Name of the velocity function in the file.
+        meshtags_name : str
+            Name of facet tags in the file.
+        meshfile : Path | None
+            Optional Gmsh .msh file to recover physical group names
+            (e.g. 'Walls', 'Outflow'). If provided, we build a
+            name -> id mapping used by set_*_bc helpers.
+        """
+
         domain = adios4dolfinx.read_mesh(bp_path, MPI.COMM_WORLD)
         W, W0, W1, V, Q, V_to_W, Q_to_W = cls.build_mixed_space(domain)
 
+        # Ground truth velocity in V
         u_true = fem.Function(V)
         adios4dolfinx.read_function(bp_path, u_true, name=fun_name)
 
+        # Embed into mixed space W as (u_true, p=0)
         w_true = fem.Function(W)
         w_true.sub(0).interpolate(u_true)
 
+        # Random sampling of velocity DOFs in V
         coords_P2 = V.tabulate_dof_coordinates()
         rng = np.random.default_rng(seed)
         sample_ids = rng.choice(len(coords_P2), size=p, replace=False)
@@ -133,21 +98,123 @@ class AirflowEstimator:
         velocity_ids_V = np.stack((x_ids, y_ids)).T.flatten()
         measurement_ids_W = np.asarray(V_to_W, dtype=np.int32)[velocity_ids_V]
 
+        # Measured mixed field
         w_measured = fem.Function(W)
         w_measured.x.array[:] = 0.0
         w_measured.x.array[measurement_ids_W] = w_true.x.array[measurement_ids_W]
 
+        # Build estimator
         est = cls(domain, w_measured, measurement_ids_W)
         est.set_ground_truth(w_true)
 
-        try:
-            tags = adios4dolfinx.read_meshtags(bp_path, domain, meshtags_name)
-        except RuntimeError as e:
+        # Read facet tags from bp (if available)
+        if meshtags_name is not None:
+            try:
+                tags = adios4dolfinx.read_meshtags(bp_path, domain, meshtags_name)
+            except RuntimeError:
+                tags = None
+        else:
             tags = None
 
         est.facet_tags = tags
-    
+
+        # Optional: read physical names from meshfile
+        if meshfile is not None:
+            import gmsh
+            gmsh.initialize()
+            gmsh.open(str(meshfile))
+            phy_groups = gmsh.model.getPhysicalGroups()
+            name_to_id = {
+                gmsh.model.getPhysicalName(dim, tag): tag
+                for (dim, tag) in phy_groups
+            }
+            gmsh.finalize()
+            est._boundary_name_to_id = name_to_id
+        else:
+            est._boundary_name_to_id = {}
+
         return est
+    
+    def _ensure_boundary_name_map(self):
+        if self.facet_tags is None:
+            raise RuntimeError("facet_tags is not set. Make sure from_file "
+                               "was called with a valid meshtags_name.")
+        if not hasattr(self, "_boundary_name_to_id") or not self._boundary_name_to_id:
+            raise RuntimeError(
+                "No boundary name->id mapping available. "
+                "Call from_file(..., meshfile=...) or set _boundary_name_to_id manually."
+            )
+
+    def set_no_slip_bc(self, wall_names: str | list[str]):
+        """
+        Apply no-slip (u=0) boundary condition on the given physical boundaries.
+
+        Parameters
+        ----------
+        wall_names : str or list[str]
+            Physical group names, e.g. 'Walls' or ['Walls', 'Obstacles'].
+        """
+        self._ensure_boundary_name_map()
+
+        if isinstance(wall_names, str):
+            names = [wall_names]
+        else:
+            names = list(wall_names)
+
+        # collect facet indices for all given names
+        domain = self.domain
+        ft = self.facet_tags
+        import numpy as np
+
+        facets = np.concatenate([
+            ft.find(self._boundary_name_to_id[name]) for name in names
+        ])
+
+        # u = 0 on these facets
+        u_D = fem.Function(self.V)
+        u_D.x.array[:] = 0.0
+
+        dofs = fem.locate_dofs_topological((self.W0, self.V),
+                                           domain.topology.dim - 1,
+                                           facets)
+        bc = fem.dirichletbc(u_D, dofs, self.W0)
+        self.add_dirichlet_bc(bc)
+        return bc
+
+    def set_zero_pressure_bc(self, outlet_names: str | list[str]):
+        """
+        Apply p=0 boundary condition on the given outlet boundaries.
+
+        Parameters
+        ----------
+        outlet_names : str or list[str]
+            Physical group names, e.g. 'Outflow'.
+        """
+        self._ensure_boundary_name_map()
+
+        if isinstance(outlet_names, str):
+            names = [outlet_names]
+        else:
+            names = list(outlet_names)
+
+        domain = self.domain
+        ft = self.facet_tags
+        import numpy as np
+
+        facets = np.concatenate([
+            ft.find(self._boundary_name_to_id[name]) for name in names
+        ])
+
+        p_zero = fem.Function(self.Q)
+        p_zero.x.array[:] = 0.0
+
+        dofs = fem.locate_dofs_topological((self.W1, self.Q),
+                                           domain.topology.dim - 1,
+                                           facets)
+        bc = fem.dirichletbc(p_zero, dofs, self.W1)
+        self.add_dirichlet_bc(bc)
+        return bc
+        
 
     @staticmethod
     def build_mixed_space(domain, deg_u=2, deg_p=1):

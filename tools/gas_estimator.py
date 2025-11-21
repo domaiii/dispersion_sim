@@ -10,52 +10,82 @@ from petsc4py import PETSc
 
 class GasSourceEstimator:
 
-    def __init__(self, domain: mesh.Mesh, wind: fem.Function, D_phys: float | None = 1e-3):
+    def __init__(self, 
+                domain: mesh.Mesh, 
+                wind: fem.Function | None = None, 
+                D_phys: float = 1e-3):
+
         self.domain = domain
+
+        # ----------------------------------------------------
+        # Wind field
+        # ----------------------------------------------------
+        if wind is None:
+            Vwind = fem.functionspace(
+                domain,
+                element("CG", domain.basix_cell(), 2, shape=(domain.geometry.dim,))
+            )
+            wind = fem.Function(Vwind)
+            wind.x.array[:] = 0.0
+            self.has_wind = False
+        else:
+            self.has_wind = True
+
         self.wind_field = wind
-        if D_phys is None:
-            D_phys = 1e-3
+
         self.D_phys = fem.Constant(domain, PETSc.ScalarType(D_phys))
 
-        # Derive function space
-        elem = wind.function_space.ufl_element()
-        degree = elem.sub_elements[0].degree if hasattr(elem, "sub_elements") else elem.degree
+        w_elem = wind.function_space.ufl_element()
+        if hasattr(w_elem, "sub_elements"):
+            degree = w_elem.sub_elements[0].degree
+        else:
+            degree = w_elem.degree
+
         if isinstance(degree, tuple):
             degree = max(degree)
 
-        self.scalar_space = fem.functionspace(domain, element("CG", domain.basix_cell(), degree))
+        self.scalar_space = fem.functionspace(
+            domain, element("CG", domain.basix_cell(), degree)
+        )
 
-        self.u = ufl.TrialFunction(self.scalar_space)
-        self.v = ufl.TestFunction(self.scalar_space)
+        self.source_est = fem.Function(self.scalar_space, name="source")
+        self.residual   = fem.Function(self.scalar_space, name="residual")
+        self.c_est      = None
+        self.f_true     = None
 
-        self.source = fem.Function(self.scalar_space, name="source")
-        self.concentration = fem.Function(self.scalar_space, name="concentration")
-        self.residual = fem.Function(self.scalar_space, name="residual")
-
-        # Geometry
         coords = domain.geometry.x
-        self.x_min, self.y_min = np.min(coords[:, 0]), np.min(coords[:, 1])
-        self.x_max, self.y_max = np.max(coords[:, 0]), np.max(coords[:, 1])
+        self.x_min, self.y_min = np.min(coords[:, :2], axis=0)
+        self.x_max, self.y_max = np.max(coords[:, :2], axis=0)
         self.Lx = self.x_max - self.x_min
         self.Ly = self.y_max - self.y_min
 
-        # SUPG parameter
         self.tau = self._build_supg_parameters()
+        self.bcs: list[fem.DirichletBC] = [self._build_default_bc()]
 
-        # BCs
-        self.bcs: list[fem.DirichletBC] = []
-        self.bcs.append(self._build_default_bc())
-
-        # Build problems
         self.forward_problem = self._build_forward_problem()
         self.adjoint_problem = self._build_adjoint_problem()
 
-        # Measurements
         self.m_ids = None
-        self.m = None
+        self.m     = None
 
-        # Optional ground truth
-        self.f_true = None
+    def set_true_gaussian_source(self, x: float, y: float, sigma: float, amplitude: float = 1.0):
+        """
+        Convenience function to define a Gaussian true source centered at (x, y).
+        """
+        f_new = fem.Function(self.scalar_space, name="f_true_gaussian")
+
+        def gaussian(xx):
+            x0, y0 = x, y
+            return amplitude * np.exp(
+                -((xx[0] - x0) ** 2 + (xx[1] - y0) ** 2) / (2 * sigma**2)
+            )
+
+        f_new.interpolate(gaussian)
+
+        # Store as ground truth (also updates ground-truth concentration)
+        self.set_ground_truth(f_new)
+
+        return f_new
 
     def set_ground_truth(self, f_true: fem.Function):
         if f_true.function_space != self.scalar_space:
@@ -63,28 +93,25 @@ class GasSourceEstimator:
         
         self.f_true = fem.Function(self.scalar_space, name="f_true")
         self.f_true.x.array[:] = f_true.x.array.copy()
-        self.get_ground_truth_concentration()
-
-        return self.f_true
     
     def get_ground_truth_concentration(self):
         if self.f_true is None:
             raise RuntimeError("No ground truth source has been set.")
 
         # Backup 
-        backup = self.source.x.array.copy()
+        backup = self.source_est.x.array.copy()
 
         # Use true source
-        self.source.x.array[:] = self.f_true.x.array
+        self.source_est.x.array[:] = self.f_true.x.array
         forward_problem = self._build_forward_problem()
         c_true = forward_problem.solve()
 
         # Restore actual inversion
-        self.source.x.array[:] = backup
+        self.source_est.x.array[:] = backup
 
         return c_true
     
-    def generate_measurements_from_ground_truth(self, p: int, seed: int = 1):
+    def reset_random_measurements(self, p: int, seed: int = 1):
         if self.f_true is None:
             raise RuntimeError("Set ground truth f_true first using set_ground_truth().")
 
@@ -98,8 +125,6 @@ class GasSourceEstimator:
         m_values = c_true.x.array[m_ids].copy()
 
         self.set_measurements(m_ids, m_values)
-
-        return m_ids, m_values
 
     def _build_default_bc(self):
         """
@@ -130,22 +155,28 @@ class GasSourceEstimator:
     def set_measurements(self, m_ids: np.ndarray, m_values: np.ndarray):
         self.m_ids = np.asarray(m_ids, dtype=np.int32)
         self.m = np.asarray(m_values, dtype=float)
-
-    def set_measurements_from_distribution(self, c_true: fem.Function, m_ids: np.ndarray):
-        self.m_ids = np.asarray(m_ids, dtype=np.int32)
-        self.m = c_true.x.array[self.m_ids].copy()
+    
+    def get_measurement_coordinates(self) -> np.ndarray:
+        if self.m_ids is None:
+            raise RuntimeError("No gas measurements set yet.")
+        
+        coords = self.scalar_space.tabulate_dof_coordinates()
+        return coords[self.m_ids]
 
     def solve_forward(self) -> fem.Function:
+        if not self.has_wind:
+            raise RuntimeError("No wind field set yet, but is required to solve forward problem.")
         self.c = self.forward_problem.solve()
         return self.c
     
-    def reinitialize(self, wind: fem.Function):
+    def reset_wind(self, wind: fem.Function):
         """
         Update wind field and all members/structures depending on it to allow reusing the instance
         for multiple experiments without creating a new GasSourceEstimator every time.
         """
         # reset
         self.wind_field = wind
+        self.has_wind = True
         self.tau = self._build_supg_parameters()
 
         self.forward_problem = self._build_forward_problem()
@@ -170,7 +201,7 @@ class GasSourceEstimator:
 
         m_ids = self.m_ids
         m = self.m
-        f = self.source
+        f = self.source_est
         residual = self.residual
 
         f.x.array[:] = 0.0  # Start at f=0
@@ -235,7 +266,9 @@ class GasSourceEstimator:
 
         self.misfit_hist_L1 = np.array(misfit_hist)
         self.alpha_hist_L1 = np.array(alpha_hist)
-        return self.source
+        self.c_est = self.solve_forward()
+
+        return self.source_est
 
     def solve_L2(self,
                 gamma_reg: float = 1e-2,
@@ -252,7 +285,7 @@ class GasSourceEstimator:
 
         m_ids = self.m_ids
         m = self.m
-        f = self.source
+        f = self.source_est
         residual = self.residual
 
         f.x.array[:] = 0.0
@@ -321,18 +354,20 @@ class GasSourceEstimator:
 
         self.misfit_hist_L2 = np.array(misfit_hist)
         self.alpha_hist_L2 = np.array(alpha_hist)
-        return self.source
+        self.c_est = self.solve_forward()
+
+        return self.source_est
 
     def estimated_source_max_location(self) -> np.ndarray:
         """
         Liefert die Koordinate des DOFs, an dem f(x) maximal ist.
         """
         coords = self.scalar_space.tabulate_dof_coordinates()
-        idx_max = np.argmax(self.source.x.array)
+        idx_max = np.argmax(self.source_est.x.array)
         return coords[idx_max]
 
     def estimated_source_max_value(self) -> float:
-        return float(np.max(self.source.x.array))
+        return float(np.max(self.source_est.x.array))
     
     def _build_supg_parameters(self):
         beta = self.wind_field
@@ -347,9 +382,10 @@ class GasSourceEstimator:
         return tau
 
     def _build_forward_problem(self):
-        u, v = self.u, self.v
+        u = ufl.TrialFunction(self.scalar_space)
+        v = ufl.TestFunction(self.scalar_space)
         beta = self.wind_field
-        f = self.source
+        f = self.source_est
         D = self.D_phys
         tau = self.tau
 
@@ -362,7 +398,7 @@ class GasSourceEstimator:
         return LinearProblem(a, L, self.bcs)
 
     def _build_adjoint_problem(self):
-        v = self.v
+        v = ufl.TestFunction(self.scalar_space)
         beta = self.wind_field
         D = self.D_phys
         residual = self.residual
