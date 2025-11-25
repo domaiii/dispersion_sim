@@ -9,7 +9,7 @@ class Visualizer2D:
         self.function_space = function_space
         self.topology, self.cell_type, self.geom = plot.vtk_mesh(function_space)
         self.grid = pv.UnstructuredGrid(self.topology, self.cell_type, self.geom)
-
+        self.has_points = False
         self.plotter = pv.Plotter(window_size=window_size)
         
         # Tracks the active scalar bar actor for removal (ensures only one is shown)
@@ -97,6 +97,7 @@ class Visualizer2D:
 
         if size is None: size = 10
         if color is None: color = "red"
+        if label is not None: self.has_points = True
         
         pts = pv.PolyData(coords)
         self.plotter.add_mesh(
@@ -121,9 +122,8 @@ class Visualizer2D:
         """
         self.plotter.view_xy()
         self.plotter.add_axes()
-        
         # Add legend
-        if self.plotter.actors:
+        if self.has_points:
             self.plotter.add_legend(face="circle", size=(0.15, 0.1)) 
             
         if title:
