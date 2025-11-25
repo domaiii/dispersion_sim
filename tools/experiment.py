@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import numpy as np
+from ufl import inner, dx
 from dolfinx import fem, mesh
 from tools.airflow_estimator import AirflowEstimator
 from tools.gas_estimator import GasSourceEstimator
@@ -7,28 +8,44 @@ from tools.gas_estimator import GasSourceEstimator
 
 @dataclass
 class SingleExperimentResult:
-    """
-    Result container for a single experiment.
-    Includes source fields, wind fields, plume, and measurement coordinates.
-    """
+    """Result container for a single experiment."""
 
-    # Source locations
+    # Source information
     true_location: np.ndarray
     est_location: np.ndarray
-    loc_error: float
 
     # Fields
     f_true: fem.Function
     f_est: fem.Function
     u_true: fem.Function
     u_est: fem.Function
-    
     c_true: fem.Function
     c_est: fem.Function
 
-    # Measurement coordinates
+    # Measurement coords
     gas_sample_coords: np.ndarray
     wind_sample_coords: np.ndarray
+
+    # ---------- Error metrics (methods) ----------
+
+    def localization_error(self) -> float:
+        """Euclidean distance between true and estimated source location."""
+        return float(np.linalg.norm(self.true_location - self.est_location))
+
+    def plume_L2_error(self) -> float:
+        """L2 error of concentration plume."""
+        diff = self.c_est - self.c_true
+        return float(np.sqrt(fem.assemble_scalar(fem.form(inner(diff, diff) * dx))))
+
+    def source_L2_error(self) -> float:
+        """L2 error of source field."""
+        diff = self.f_est - self.f_true
+        return float(np.sqrt(fem.assemble_scalar(fem.form(inner(diff, diff) * dx))))
+
+    def wind_L2_error(self) -> float:
+        """L2 error of reconstructed wind field."""
+        diff = self.u_est - self.u_true
+        return float(np.sqrt(fem.assemble_scalar(fem.form(inner(diff, diff) * dx))))
 
 
 class SingleExperiment:
