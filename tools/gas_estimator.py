@@ -111,6 +111,26 @@ class GasSourceEstimator:
 
         return c_true
     
+    def reset(self):
+        """
+        Completely reset the estimator state after running an experiment.
+        Clears source estimate, plume estimate, measurements, and adjoint RHS.
+        """
+        # Reset source estimate
+        if self.source_est is not None:
+            self.source_est.x.array[:] = 0.0
+
+        # Reset concentration estimate
+        self.c_est = None
+
+        # Reset measurements (indices + values)
+        self.m_ids = None
+        self.m = None
+
+        # Reset adjoint residual
+        if self.residual is not None:
+            self.residual.x.array[:] = 0.0
+    
     def reset_random_measurements(self, p: int, seed: int = 1):
         if self.f_true is None:
             raise RuntimeError("Set ground truth f_true first using set_ground_truth().")
@@ -313,7 +333,8 @@ class GasSourceEstimator:
 
                 a *= rho
                 if a < 1e-12:
-                    print("Step size too small.")
+                    if verbose:
+                        print("Step size too small.")
                     break
 
             alpha = a
