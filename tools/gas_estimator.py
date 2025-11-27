@@ -94,7 +94,7 @@ class GasSourceEstimator:
         self.f_true = fem.Function(self.scalar_space, name="f_true")
         self.f_true.x.array[:] = f_true.x.array.copy()
     
-    def get_ground_truth_concentration(self):
+    def dispersion_for_true_source(self):
         if self.f_true is None:
             raise RuntimeError("No ground truth source has been set.")
 
@@ -136,7 +136,7 @@ class GasSourceEstimator:
             raise RuntimeError("Set ground truth f_true first using set_ground_truth().")
 
         # Always recompute GT concentration cleanly
-        c_true = self.get_ground_truth_concentration()
+        c_true = self.dispersion_for_true_source()
 
         rng = np.random.default_rng(seed)
         n = c_true.x.array.size
@@ -202,7 +202,6 @@ class GasSourceEstimator:
         self.forward_problem = self._build_forward_problem()
         self.adjoint_problem = self._build_adjoint_problem()
 
-        # Depend on wind field as well
         self.m_ids = None
         self.m = None
 

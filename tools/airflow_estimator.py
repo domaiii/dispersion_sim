@@ -42,7 +42,7 @@ class AirflowEstimator:
         self.weight_pde_error = weight_pde_error
         self.weight_reg = weight_reg
 
-        # Optionals
+        # Optional
         self.bcs: list[fem.DirichletBC] = []
         self.facet_tags = None
         self.w_final: fem.Function | None = None
@@ -53,8 +53,8 @@ class AirflowEstimator:
     @classmethod
     def from_file(cls,
                   bp_path: Path,
-                  p: int,
-                  seed: int,
+                  p: int | None = 0,
+                  seed: int | None = 0,
                   fun_name: str | None = "velocity",
                   meshtags_name: str | None = "facet_tags",
                   meshfile: Path | None = None):

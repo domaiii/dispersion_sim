@@ -79,7 +79,7 @@ class Visualizer2D:
         self.plotter.add_mesh(glyphs, cmap="coolwarm", 
                               scalar_bar_args={**self.scalar_bar_args, "title": f"{name} Magnitude"})
 
-    def add_points(self, coords, 
+    def add_points(self, coords: list | tuple | np.ndarray, 
                    color: str | None = None, size: int | None = None, label: str | None = None):
         """
         Add 2D or 3D point coordinates. Accepts list, tuple, or ndarray.

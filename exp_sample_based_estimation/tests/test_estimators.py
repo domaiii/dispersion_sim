@@ -116,7 +116,7 @@ vis.show(title="Gas Source: True vs Estimated", zoom=1.2)
 vis2 = Visualizer2D(gas_old.scalar_space, font_size=26)
 
 # Estimated source field
-vis2.add_scalar_field("Gas Distribution", gas_old.get_ground_truth_concentration())
+vis2.add_scalar_field("Gas Distribution", gas_old.dispersion_for_true_source())
 
 # Measurement point coordinates
 meas_coords = gas_old.scalar_space.tabulate_dof_coordinates()[gas_old.m_ids]
