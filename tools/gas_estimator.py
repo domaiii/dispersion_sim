@@ -131,19 +131,63 @@ class GasSourceEstimator:
         if self.residual is not None:
             self.residual.x.array[:] = 0.0
     
+    # def reset_random_measurements(self, p: int, seed: int = 1):
+    #     if self.f_true is None:
+    #         raise RuntimeError("Set ground truth f_true first using set_ground_truth().")
+
+    #     # Always recompute GT concentration cleanly
+    #     c_true = self.dispersion_for_true_source()
+
+    #     rng = np.random.default_rng(seed)
+    #     n = c_true.x.array.size
+
+    #     m_ids = rng.choice(np.arange(n), size=p, replace=False)
+    #     m_values = c_true.x.array[m_ids].copy()
+
+    #     self.set_measurements(m_ids, m_values)
+
     def reset_random_measurements(self, p: int, seed: int = 1):
+        """
+        Sample gas measurements only from valid DOFs inside the domain,
+        excluding outer boundary layers (SUPG-sensitive).
+        """
         if self.f_true is None:
             raise RuntimeError("Set ground truth f_true first using set_ground_truth().")
 
-        # Always recompute GT concentration cleanly
         c_true = self.dispersion_for_true_source()
 
         rng = np.random.default_rng(seed)
-        n = c_true.x.array.size
 
-        m_ids = rng.choice(np.arange(n), size=p, replace=False)
+        coords = self.scalar_space.tabulate_dof_coordinates()
+        x = coords[:, 0]
+        y = coords[:, 1]
+
+        xmin, xmax = x.min(), x.max()
+        ymin, ymax = y.min(), y.max()
+        Lx = xmax - xmin
+        Ly = ymax - ymin
+
+        margin_x = 0.05 * Lx
+        margin_y = 0.05 * Ly
+
+        interior_dofs = np.where(
+            (x > xmin + margin_x) &
+            (x < xmax - margin_x) &
+            (y > ymin + margin_y) &
+            (y < ymax - margin_y)
+        )[0]
+
+        if len(interior_dofs) < p:
+            raise ValueError(
+                f"Requested {p} gas samples, but only {len(interior_dofs)} valid "
+                "interior DOFs are available. Reduce p_gas or margin thickness."
+            )
+
+        # --- 5) Stichprobe ziehen ---
+        m_ids = rng.choice(interior_dofs, size=p, replace=False)
         m_values = c_true.x.array[m_ids].copy()
 
+        # --- 6) Speichern ---
         self.set_measurements(m_ids, m_values)
 
     def _build_default_bc(self):

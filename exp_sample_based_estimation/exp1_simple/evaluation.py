@@ -3,122 +3,184 @@ import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
 
-df = pd.read_parquet("/home/dominik/git/dispersion_sim/exp_sample_based_estimation/exp1_simple/test_bug_exp.parquet")
+# ---------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------
+WDIR = Path(__file__).parent
+DATAFILE = WDIR / "exp1_result.parquet"
+OUTPUT_DIR = WDIR / "result_plots"
+OUTPUT_DIR.mkdir(exist_ok=True)
 
 # ---------------------------------------------------------
-# Preprocess
+# Global style
 # ---------------------------------------------------------
-# Sorted unique values
+plt.style.use("seaborn-v0_8-whitegrid")
+plt.rcParams.update({
+    "font.size": 13,
+    "axes.labelsize": 14,
+    "axes.titlesize": 15,
+    "lines.linewidth": 2.2,
+    "lines.markersize": 7,
+    "legend.fontsize": 12,
+    "axes.edgecolor": "0.3",
+    "axes.titlepad": 12,
+})
+
+# ---------------------------------------------------------
+# Legend configuration (centralized)
+# ---------------------------------------------------------
+LEGEND_KW = dict(
+    loc="upper center",
+    bbox_to_anchor=(0.5, -0.18),
+    ncol=3,
+    frameon=False,
+    fontsize=12,
+    title_fontsize=12
+)
+
+def add_legend(ax, title=None):
+    leg = ax.legend(**LEGEND_KW)
+    if title:
+        leg.set_title(title)
+
+# ---------------------------------------------------------
+# Helper: save figure as vector PDF (+ optional show)
+# ---------------------------------------------------------
+def save_fig(fig, name: str, show=True):
+    fig.tight_layout()
+    fig.savefig(OUTPUT_DIR / f"{name}.pdf", format="pdf")
+    if show:
+        fig.show()
+
+# ---------------------------------------------------------
+# Load data
+# ---------------------------------------------------------
+df = pd.read_parquet(DATAFILE)
+
+MAX_P_GAS = 400
+MAX_P_WIND = 400
+
 p_wind_values = sorted([v for v in df["p_wind"].unique() if np.isfinite(v)])
 p_gas_values  = sorted(df["p_gas"].unique())
 
-# Mean over seeds & source locations
+p_gas_values  = [v for v in p_gas_values  if v <= MAX_P_GAS]
+p_wind_values = [v for v in p_wind_values if v <= MAX_P_WIND]
+
 grouped = df.groupby(["p_wind", "p_gas"]).mean(numeric_only=True).reset_index()
 
-# Separate baseline (true wind)
-baseline = df[df["wind_source"] == "true"].groupby("p_gas").mean(numeric_only=True).reset_index()
+baseline = (
+    df[df["wind_source"] == "true"]
+    .groupby("p_gas")
+    .mean(numeric_only=True)
+    .reset_index()
+)
+
+wind_error = (
+    df[df["wind_source"] == "reconstructed"]
+    .groupby("p_wind")
+    .mean(numeric_only=True)
+    .reset_index()
+)
+
+# color palette
+palette_pw = plt.cm.tab10(np.linspace(0, 1, len(p_wind_values)))
+palette_pg = plt.cm.tab10(np.linspace(0, 1, len(p_gas_values)))
 
 # ---------------------------------------------------------
-# Build figure
+# (a) Localization Error vs Gas Samples
 # ---------------------------------------------------------
-fig, axes = plt.subplots(2, 3, figsize=(22, 12))
-axes = axes.flatten()
+fig, ax = plt.subplots(figsize=(6, 6))
+for color, p_w in zip(palette_pw, p_wind_values):
+    sub = grouped[(grouped["p_wind"] == p_w) & (grouped["p_gas"] <= MAX_P_GAS)]
+    ax.plot(sub["p_gas"], sub["loc_error"], marker="o", color=color,
+            label=f"{int(p_w)}")
 
-# =========================================================
-# 1) Localization error vs gas samples (per wind samples)
-# =========================================================
-ax = axes[0]
-for p_w in p_wind_values:
-    sub = grouped[grouped["p_wind"] == p_w]
-    ax.plot(sub["p_gas"], sub["loc_error"], marker="o", label=f"pw={p_w}")
+b = baseline[baseline["p_gas"] <= MAX_P_GAS]
+ax.plot(b["p_gas"], b["loc_error"], "k--", linewidth=2.5, label="True wind")
 
-# Add baseline (true wind)
-ax.plot(baseline["p_gas"], baseline["loc_error"], "k--", linewidth=2.5, label="true wind")
+ax.set_xlabel("Number of Gas Samples")
+ax.set_ylabel("Localization Error")
+ax.set_title("Localization Error vs. Number of Gas Samples")
+add_legend(ax, "Gas Sample Size")
+save_fig(fig, "loc_error_vs_gas")
 
-ax.set_xlabel("Gas samples p_gas")
-ax.set_ylabel("Localization error")
-ax.set_title("Localization error vs gas samples")
-ax.grid(True)
-ax.legend()
+# ---------------------------------------------------------
+# (b) Localization Error vs Wind Samples
+# ---------------------------------------------------------
+fig, ax = plt.subplots(figsize=(6, 6))
+for color, p_g in zip(palette_pg, p_gas_values):
+    sub = grouped[(grouped["p_gas"] == p_g) & (grouped["p_wind"] <= MAX_P_WIND)]
+    ax.plot(sub["p_wind"], sub["loc_error"], marker="o", color=color,
+            label=f"{int(p_g)}")
 
+ax.set_xlabel("Number of Wind Samples")
+ax.set_ylabel("Localization Error")
+ax.set_title("Localization Error vs. Number of Wind Samples")
+add_legend(ax, "Gas Sample Size")
+save_fig(fig, "loc_error_vs_wind")
 
-# =========================================================
-# 2) Localization error vs wind samples (per gas samples)
-# =========================================================
-ax = axes[1]
-for p_g in p_gas_values:
-    sub = grouped[grouped["p_gas"] == p_g]
-    ax.plot(sub["p_wind"], sub["loc_error"], marker="o", label=f"pg={p_g}")
+# ---------------------------------------------------------
+# (c) Relative Plume Error vs Gas Samples
+# ---------------------------------------------------------
+fig, ax = plt.subplots(figsize=(6, 6))
+for color, p_w in zip(palette_pw, p_wind_values):
+    sub = grouped[(grouped["p_wind"] == p_w) & (grouped["p_gas"] <= MAX_P_GAS)]
+    ax.plot(sub["p_gas"], sub["rel_plume_L2"], marker="o", color=color,
+            label=f"{int(p_w)}")
 
-ax.set_xlabel("Wind samples p_wind")
-ax.set_ylabel("Localization error")
-ax.set_title("Localization error vs wind samples")
-ax.grid(True)
-ax.legend()
+b = baseline[baseline["p_gas"] <= MAX_P_GAS]
+ax.plot(b["p_gas"], b["rel_plume_L2"], "k--", linewidth=2.5, label="True wind")
 
+ax.set_xlabel("Number of Gas Samples")
+ax.set_ylabel("Relative Plume Error (L2)")
+ax.set_title("Relative Plume Error vs. Number of Gas Samples")
+add_legend(ax, "Wind Sample Size")
+save_fig(fig, "rel_plume_vs_gas")
 
-# =========================================================
-# 3) Plume error vs gas samples (per wind samples)
-# =========================================================
-ax = axes[2]
-for p_w in p_wind_values:
-    sub = grouped[grouped["p_wind"] == p_w]
-    ax.plot(sub["p_gas"], sub["rel_plume_L2"], marker="o", label=f"pw={p_w}")
+# ---------------------------------------------------------
+# (d) Relative Plume Error vs Wind Samples
+# ---------------------------------------------------------
+fig, ax = plt.subplots(figsize=(6, 6))
+for color, p_g in zip(palette_pg, p_gas_values):
+    sub = grouped[(grouped["p_gas"] == p_g) & (grouped["p_wind"] <= MAX_P_WIND)]
+    ax.plot(sub["p_wind"], sub["rel_plume_L2"], marker="o", color=color,
+            label=f"{int(p_g)}")
 
-# Baseline with true wind
-ax.plot(baseline["p_gas"], baseline["rel_plume_L2"], "k--", linewidth=2.5, label="true wind")
+ax.set_xlabel("Number of Wind Samples")
+ax.set_ylabel("Relative Plume Error (L2)")
+ax.set_title("Relative Plume Error vs. Number of Wind Samples")
+add_legend(ax, "Gas Sample Size")
+save_fig(fig, "rel_plume_vs_wind")
 
-ax.set_xlabel("Gas samples p_gas")
-ax.set_ylabel("Relative plume L2 error")
-ax.set_title("Relative Plume Error for Gas Samples")
-ax.grid(True)
-ax.legend()
+# ---------------------------------------------------------
+# (e) Relative Wind Reconstruction Error
+# ---------------------------------------------------------
+fig, ax = plt.subplots(figsize=(6, 6))
+w = wind_error[wind_error["p_wind"] <= MAX_P_WIND]
+ax.plot(w["p_wind"], w["rel_wind_L2"],
+        marker="o", color=palette_pw[0])
 
+ax.set_xlabel("Number of Wind Samples")
+ax.set_ylabel("Relative Wind Error (L2)")
+ax.set_title("Relative Wind Reconstruction Error")
+add_legend(ax)
+save_fig(fig, "wind_error_vs_wind")
 
-# =========================================================
-# 4) Plume error vs wind samples (per gas samples)
-# =========================================================
-ax = axes[3]
-for p_g in p_gas_values:
-    sub = grouped[grouped["p_gas"] == p_g]
-    ax.plot(sub["p_wind"], sub["rel_plume_L2"], marker="o", label=f"pg={p_g}")
+# ---------------------------------------------------------
+# (f) Absolute Plume Error vs Gas Samples
+# ---------------------------------------------------------
+fig, ax = plt.subplots(figsize=(6, 6))
+for color, p_w in zip(palette_pw, p_wind_values):
+    sub = grouped[(grouped["p_wind"] == p_w) & (grouped["p_gas"] <= MAX_P_GAS)]
+    ax.plot(sub["p_gas"], sub["plume_L2"], marker="o", color=color,
+            label=f"{int(p_w)}")
 
-ax.set_xlabel("Wind samples p_wind")
-ax.set_ylabel("Relative plume L2 error")
-ax.set_title("Relative plume error vs wind samples")
-ax.grid(True)
-ax.legend()
+b = baseline[baseline["p_gas"] <= MAX_P_GAS]
+ax.plot(b["p_gas"], b["plume_L2"],
+        "k--", linewidth=2.5, label="True wind")
 
-
-# =========================================================
-# 5) Wind L2 error vs wind samples
-# =========================================================
-ax = axes[4]
-
-sub = df[df["wind_source"] == "reconstructed"]
-wind_error = sub.groupby("p_wind").mean(numeric_only=True).reset_index()
-
-ax.plot(wind_error["p_wind"], wind_error["rel_wind_L2"], marker="o")
-ax.set_xlabel("Wind samples p_wind")
-ax.set_ylabel("Relative wind L2 error")
-ax.set_title("Relative Wind Reconstruction Error vs Wind Samples")
-ax.grid(True)
-
-# =========================================================
-# 3) Plume error vs gas samples (per wind samples)
-# =========================================================
-ax = axes[5]
-for p_w in p_wind_values:
-    sub = grouped[grouped["p_wind"] == p_w]
-    ax.plot(sub["p_gas"], sub["plume_L2"], marker="o", label=f"pw={p_w}")
-
-# Baseline with true wind
-ax.plot(baseline["p_gas"], baseline["plume_L2"], "k--", linewidth=2.5, label="true wind")
-
-ax.set_xlabel("Gas samples p_gas")
-ax.set_ylabel("Absolute plume L2 error")
-ax.set_title("Absolute Plume Error for Gas Samples")
-ax.grid(True)
-ax.legend()
-plt.tight_layout()
-plt.show()
+ax.set_xlabel("Number of Gas Samples")
+ax.set_ylabel("Absolute Plume Error (L2)")
+ax.set_title("Absolute Plume Error vs. Number of Gas Samples")
+add_legend(ax, "Wind Sample Size")
+save_fig(fig, "abs_plume_vs_gas")
