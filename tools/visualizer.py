@@ -1,6 +1,6 @@
 import numpy as np
 import pyvista as pv
-
+from pathlib import Path
 from dolfinx import fem, plot
 
 class Visualizer2D:
@@ -73,7 +73,7 @@ class Visualizer2D:
         vec3d = np.hstack((vec2d, np.zeros((vec2d.shape[0], 1))))
         self.grid.point_data[name] = vec3d
 
-        subset = self.grid.extract_points(np.arange(self.grid.n_points))
+        subset = self.grid.extract_points(np.arange(0, self.grid.n_points, 2), include_cells=False)
         glyphs = subset.glyph(orient=name, scale=name, factor=factor)
         
         self.plotter.add_mesh(glyphs, cmap="coolwarm", 
@@ -130,3 +130,50 @@ class Visualizer2D:
             self.plotter.add_text(title, position="upper_edge", font_size=16, color="black")
         self.plotter.zoom_camera(zoom)
         self.plotter.show()
+
+    @staticmethod
+    def export_matlab(f: fem.Function, filename: str | Path):
+        """
+        Export a dolfinx Function (scalar or vector) and the P1 mesh to a MATLAB .mat file.
+
+        Supports:
+            - scalar fields:  f : Ω -> R
+            - vector fields:  f : Ω -> R^2 (first 2 comps)
+            on triangular meshes.
+        """
+
+        from scipy.io import savemat
+
+        mesh = f.function_space.mesh
+        tdim = mesh.topology.dim
+
+        # --- Ensure P1 triangle connectivity exists ---
+        mesh.topology.create_connectivity(tdim, 0)
+        conn = mesh.topology.connectivity(tdim, 0).array
+        num_cells = len(conn) // 3
+        cells = conn.reshape(num_cells, 3) + 1    # MATLAB = 1-based
+
+        # --- Extract geometry (2D only) ---
+        points = mesh.geometry.x[:, :2]
+
+        # --- Extract function values ---
+        arr = f.x.array
+        block = f.x.block_size
+
+        if block == 1:
+            # scalar function
+            U = arr.reshape(-1, 1)
+        elif block >= 2:
+            # vector function → take first two components
+            U = arr.reshape(-1, block)[:, :2]
+        else:
+            raise ValueError(f"Unsupported block size: {block}")
+
+        data = {
+            "cells": cells.astype(np.int32),
+            "points": points.astype(float),
+            "u": U.astype(float)
+        }
+
+        savemat(filename, data)
+        print(f"[export_matlab] Wrote MATLAB file: {filename}")

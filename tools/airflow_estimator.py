@@ -14,7 +14,7 @@ from petsc4py import PETSc
 
 class AirflowEstimator:
     def __init__(self,
-                 domain: mesh,
+                 domain: mesh.Mesh,
                  w_measured: fem.Function,
                  measurement_ids_W,
                  kin_viscosity: float = 1.5e-4,
@@ -25,7 +25,7 @@ class AirflowEstimator:
         Initialisiert den Estimator OHNE Boundary Conditions.
         Alle Funktionsräume werden aufgebaut, damit man sie direkt für BCs nutzen kann.
         """
-        self.domain = domain
+        self.domain: mesh.Mesh = domain
         self.measurement_ids_W = np.asarray(measurement_ids_W, dtype=np.int32)
         self.w_measured = w_measured
 
