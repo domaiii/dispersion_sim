@@ -1,7 +1,8 @@
 import numpy as np
 import pyvista as pv
+from scipy.io import savemat
 from pathlib import Path
-from dolfinx import fem, plot
+from dolfinx import fem, plot, mesh
 
 class Visualizer2D:
 
@@ -132,7 +133,7 @@ class Visualizer2D:
         self.plotter.show()
 
     @staticmethod
-    def export_matlab(f: fem.Function, filename: str | Path):
+    def export_function_matlab(f: fem.Function, filename: str | Path):
         """
         Export a dolfinx Function (scalar or vector) and the P1 mesh to a MATLAB .mat file.
 
@@ -141,9 +142,6 @@ class Visualizer2D:
             - vector fields:  f : Ω -> R^2 (first 2 comps)
             on triangular meshes.
         """
-
-        from scipy.io import savemat
-
         mesh = f.function_space.mesh
         tdim = mesh.topology.dim
 
@@ -177,3 +175,57 @@ class Visualizer2D:
 
         savemat(filename, data)
         print(f"[export_matlab] Wrote MATLAB file: {filename}")
+
+    @staticmethod
+    def export_domain_matlab(mesh: mesh.Mesh, filename: str | Path, facet_tags=None):
+        """
+        Export a dolfinx 2D triangular P1 mesh to MATLAB.
+        
+        Saves:
+            - cells : (Nc x 3) int32   triangle connectivity (1-based)
+            - points: (Np x 2) double  coordinates
+            - facets (optional): boundary facet vertex pairs (1-based)
+            - facet_indices, facet_values (optional): tag structure
+        """
+        tdim = mesh.topology.dim
+
+        mesh.topology.create_connectivity(tdim, 0)
+        conn = mesh.topology.connectivity(tdim, 0).array
+        num_cells = len(conn) // 3
+        cells = conn.reshape(num_cells, 3) + 1  # MATLAB uses 1-based indexing
+
+        points = mesh.geometry.x[:, :2]
+
+        save_dict = {
+            "cells": cells.astype(np.int32),
+            "points": points.astype(float)
+        }
+
+        if facet_tags is not None:
+            # Connectivity: facets → vertices
+            mesh.topology.create_connectivity(1, 0)
+            f2v = mesh.topology.connectivity(1, 0)
+
+            # From adjacent list to Nx2 array
+            arr = f2v.array
+            offs = f2v.offsets
+            vert_lens = offs[1:] - offs[:-1]
+            if not np.all(vert_lens == 2):
+                bad = np.where(vert_lens != 2)[0]
+                raise RuntimeError(
+                    f"Facet(s) {bad} have {vert_lens[bad]} vertices, expected two. "
+                    "Mesh is not a pure triangular 2D mesh."
+                )           
+            
+            facets = np.column_stack((arr[offs[:-1]], arr[offs[:-1] + 1])) + 1   # 1-based
+
+            save_dict["facets"] = facets
+            save_dict["facet_indices"] = facet_tags.indices + 1
+            save_dict["facet_values"] = facet_tags.values
+
+        savemat(filename, save_dict) 
+        
+        if facet_tags is not None:
+            print(f"[export_domain] Saved MATLAB domain and facet tags: {filename})")
+        else:
+            print(f"[export_domain] Wrote MATLAB domain file: {filename}")
