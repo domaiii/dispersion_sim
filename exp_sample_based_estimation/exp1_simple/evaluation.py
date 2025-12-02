@@ -83,8 +83,8 @@ wind_error = (
 )
 
 # color palette
-palette_pw = plt.cm.tab10(np.linspace(0, 1, len(p_wind_values)))
-palette_pg = plt.cm.tab10(np.linspace(0, 1, len(p_gas_values)))
+palette_pw = plt.cm.Blues(np.linspace(0.3, 1.0, len(p_wind_values)))
+palette_pg = plt.cm.Oranges(np.linspace(0.3, 1.0, len(p_wind_values)))
 
 # ---------------------------------------------------------
 # (a) Localization Error vs Gas Samples
@@ -96,12 +96,12 @@ for color, p_w in zip(palette_pw, p_wind_values):
             label=f"{int(p_w)}")
 
 b = baseline[baseline["p_gas"] <= MAX_P_GAS]
-ax.plot(b["p_gas"], b["loc_error"], "k--", linewidth=2.5, label="True wind")
+# ax.plot(b["p_gas"], b["loc_error"], "k--", linewidth=2.5, label="True wind")
 
 ax.set_xlabel("Number of Gas Samples")
-ax.set_ylabel("Localization Error")
+ax.set_ylabel("Localization Error (m)")
 ax.set_title("Localization Error vs. Number of Gas Samples")
-add_legend(ax, "Gas Sample Size")
+add_legend(ax, "Wind Sample Size")
 save_fig(fig, "loc_error_vs_gas")
 
 # ---------------------------------------------------------
@@ -114,7 +114,7 @@ for color, p_g in zip(palette_pg, p_gas_values):
             label=f"{int(p_g)}")
 
 ax.set_xlabel("Number of Wind Samples")
-ax.set_ylabel("Localization Error")
+ax.set_ylabel("Localization Error (m)")
 ax.set_title("Localization Error vs. Number of Wind Samples")
 add_legend(ax, "Gas Sample Size")
 save_fig(fig, "loc_error_vs_wind")
@@ -129,7 +129,7 @@ for color, p_w in zip(palette_pw, p_wind_values):
             label=f"{int(p_w)}")
 
 b = baseline[baseline["p_gas"] <= MAX_P_GAS]
-ax.plot(b["p_gas"], b["rel_plume_L2"], "k--", linewidth=2.5, label="True wind")
+# ax.plot(b["p_gas"], b["rel_plume_L2"], "k--", linewidth=2.5, label="True wind")
 
 ax.set_xlabel("Number of Gas Samples")
 ax.set_ylabel("Relative Plume Error (L2)")
@@ -176,8 +176,8 @@ for color, p_w in zip(palette_pw, p_wind_values):
             label=f"{int(p_w)}")
 
 b = baseline[baseline["p_gas"] <= MAX_P_GAS]
-ax.plot(b["p_gas"], b["plume_L2"],
-        "k--", linewidth=2.5, label="True wind")
+# ax.plot(b["p_gas"], b["plume_L2"],
+#         "k--", linewidth=2.5, label="True wind")
 
 ax.set_xlabel("Number of Gas Samples")
 ax.set_ylabel("Absolute Plume Error (L2)")
