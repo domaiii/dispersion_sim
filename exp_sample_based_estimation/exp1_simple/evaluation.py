@@ -83,7 +83,7 @@ wind_error = (
 )
 
 # color palette
-palette_pw = plt.cm.Blues(np.linspace(0.3, 1.0, len(p_wind_values)))
+palette_pw = plt.cm.Blues(np.linspace(0.7, 1.0, len(p_wind_values)))
 palette_pg = plt.cm.Oranges(np.linspace(0.3, 1.0, len(p_wind_values)))
 
 # ---------------------------------------------------------
