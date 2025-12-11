@@ -4,17 +4,25 @@ from ufl import inner, dx
 from dolfinx import fem, mesh
 from tools.airflow_estimator import AirflowEstimator
 from tools.gas_estimator import GasSourceEstimator
+from ufl import sqrt, inner, acos, min_value, max_value, conditional, gt
+
+@dataclass
+class ErrorValue:
+    """Container for error metrics of a scalar field."""
+    L2: float       # abs L2 norm of error field
+    RMS: float      # root-mean-square error (L2 normalized by domain area)
 
 
 @dataclass
 class SingleExperimentResult:
-    """Result container for a single experiment."""
+    """
+    Container storing all PDE fields, measurements and error metrics
+    for a single experiment run.
+    """
 
-    # Source information
     true_location: np.ndarray
     est_location: np.ndarray
 
-    # Fields
     f_true: fem.Function
     f_est: fem.Function
     u_true: fem.Function
@@ -22,42 +30,96 @@ class SingleExperimentResult:
     c_true: fem.Function
     c_est: fem.Function
 
-    # Measurement coords
+    # --- measurement coords ---
     gas_sample_coords: np.ndarray
     wind_sample_coords: np.ndarray
 
-    # ---------- Error metrics (methods) ----------
-    def _L2(self, fun:fem.Function) -> float:
+    # Internal helper functions
+    def _L2(self, fun) -> float:
+        """Absolute L2 norm of a FEM function."""
         return float(np.sqrt(fem.assemble_scalar(fem.form(inner(fun, fun) * dx))))
-    
-    def _rel_error_L2(self, ref: fem.Function, fun: fem.Function) -> float:
+
+    def _rel_error_L2(self, ref, fun) -> float:
+        """Relative L2 error |ref - fun| / |ref|."""
         abs_err = self._L2(ref - fun)
         true_norm = self._L2(ref)
-        return np.abs(abs_err / true_norm) if true_norm > 1e-14 else 0.0
-    
+        return abs_err / true_norm if true_norm > 1e-14 else 0.0
+
+    def _domain_area(self) -> float:
+        """Compute measure of domain for RMS normalisation."""
+        mesh = self.c_true.function_space.mesh
+        dx_m = dx(domain=mesh)
+        return float(fem.assemble_scalar(fem.form(1.0 * dx_m)))
+
+    def _make_error(self, L2: float) -> ErrorValue:
+        """Convert absolute L2 error to ErrorValue(L2, RMS)."""
+        A = self._domain_area()
+        return ErrorValue(L2=L2, RMS=L2 / np.sqrt(A))
+
+    # High-level error metrics
     def localization_error(self) -> float:
         """Euclidean distance between true and estimated source location."""
         return float(np.linalg.norm(self.true_location - self.est_location))
 
-    def abs_plume_error(self) -> float:
-        """L2 error of concentration plume."""
-        return self._L2(self.c_est - self.c_true)
+    def plume_error(self) -> ErrorValue:
+        """Absolute and RMS L2 error of concentration plume."""
+        L2 = self._L2(self.c_est - self.c_true)
+        return self._make_error(L2)
 
-    def rel_plume_error(self) -> float:
-        return self._rel_error_L2(self.c_true, self.c_est)
-    
-    def abs_wind_error(self) -> float:
-        """L2 error of reconstructed wind field."""
-        return self._L2(self.u_est - self.u_true)
-    
-    def rel_wind_error(self) -> float:
+    def plume_error_norm(self) -> ErrorValue:
+        """Plume error normalized by max(c_true), returns L2 and RMS of (c_est - c_true)/c_max."""
+        cmax = float(np.max(self.c_true.x.array))
+        scale = 1.0 / (cmax + 1e-12)
+
+        diff = (self.c_est - self.c_true) * scale
+        L2 = self._L2(diff)
+
+        return self._make_error(L2)
+
+    def wind_error(self) -> ErrorValue:
+        """L2 and RMS error of reconstructed wind vector field."""
+        L2 = self._L2(self.u_est - self.u_true)
+        return self._make_error(L2)
+
+    def wind_error_rel(self) -> float:
         return self._rel_error_L2(self.u_true, self.u_est)
-    
-    def abs_source_error(self) -> float:
-        """L2 error of source field."""
-        return self._L2(self.f_est - self.f_true)
 
+    def magnitude_wind_error(self) -> ErrorValue:
+        """L2 and RMS error of |u_est| - |u_true|."""
+        mag_est = sqrt(inner(self.u_est, self.u_est))
+        mag_true = sqrt(inner(self.u_true, self.u_true))
+        diff_sq = (mag_est - mag_true) * (mag_est - mag_true)
+        L2 = float(np.sqrt(fem.assemble_scalar(fem.form(diff_sq * dx))))
+        return self._make_error(L2)
 
+    def angular_wind_error(self, eps=0.0) -> ErrorValue:
+        """
+        L2 and RMS angular error of wind direction.
+        eps > 0 masks regions where |u_true| < eps (optional).
+        """
+        est_norm  = sqrt(inner(self.u_est,  self.u_est))
+        true_norm = sqrt(inner(self.u_true, self.u_true))
+
+        dot = inner(self.u_est, self.u_true)
+        arg = dot / (est_norm * true_norm + 1e-12)
+        arg = min_value(1.0, max_value(-1.0, arg))
+
+        angle = acos(arg)
+
+        if eps > 0:
+            true_mag = sqrt(inner(self.u_true, self.u_true))
+            mask = conditional(gt(true_mag, eps), 1.0, 0.0)
+            angle_sq = inner(angle * mask, angle * mask)
+        else:
+            angle_sq = inner(angle, angle)
+
+        L2 = float(np.sqrt(fem.assemble_scalar(fem.form(angle_sq * dx))))
+        return self._make_error(L2)
+
+    def source_error(self) -> ErrorValue:
+        """L2 and RMS error of source term."""
+        L2 = self._L2(self.f_est - self.f_true)
+        return self._make_error(L2)
 
 
 class SingleExperiment:
@@ -162,70 +224,12 @@ class SingleExperiment:
 
     def run_L2(self, verbose=True):
         return self._run(reg="L2", verbose=verbose)
-    
-    # def _run(self, reg: str, verbose=True):
-    #     air = self.air_est
-    #     gas = self.gas_est
-
-    #     # ---------------- Wind reconstruction ----------------
-    #     if not self.use_true_wind:
-    #         air.reset_random_measurements(self.p_wind, self.wind_seed)
-    #         u_est = air.solve(maxit=5).sub(0).collapse()
-    #     else:
-    #         u_est = air.ground_truth.sub(0).collapse()
-        
-    #     u_true = air.ground_truth.sub(0).collapse()
-
-    #     # ---------------- Gas reconstruction ----------------
-    #     gas.reset_wind(u_est)
-
-    #     sigma = self.sigma_factor * gas.Lx
-    #     gas.set_true_gaussian_source(self.x0, self.y0, sigma, amplitude=self.amplitude)
-    #     f_true = gas.f_true
-
-    #     gas.reset_random_measurements(self.p_gas, seed=self.gas_seed)
-
-    #     if reg == "L1":
-    #         f_est = gas.solve_L1(gamma_reg=self.gamma_reg, verbose=verbose)
-    #     elif reg == "L2":
-    #         f_est = gas.solve_L2(gamma_reg=self.gamma_reg, verbose=verbose)
-    #     else:
-    #         raise ValueError(f"Unknown regularization type: {reg}")
-
-    #     c_est = gas.c_est
-
-    #     # ---------------- Save measurement coords ----------------
-    #     gas_coords = gas.get_measurement_coordinates()
-    #     if self.use_true_wind:
-    #         wind_coords = None
-    #     else:
-    #         wind_coords = air.get_measurement_coordinates()
-
-    #     # ---------------- Compute true gas dispersion ----------------
-    #     gas.reset_wind(u_true)
-    #     c_true = gas.dispersion_for_true_source()        
-
-    #     # ---------------- Error metrics ----------------
-    #     coords = gas.scalar_space.tabulate_dof_coordinates()
-    #     true_loc = coords[np.argmax(f_true.x.array)]
-    #     est_loc = coords[np.argmax(f_est.x.array)]
-
-    #     # ---------------- Build result object ----------------
-    #     return SingleExperimentResult(
-    #         true_loc, est_loc,
-    #         f_true.copy(), f_est.copy(),
-    #         u_true.copy(), u_est.copy(),
-    #         c_true.copy(), c_est.copy(),
-    #         gas_coords, wind_coords
-    #     )
 
     def _run(self, reg: str, verbose=True):
         air = self.air_est
         gas = self.gas_est
 
-        # ----------------------------------------------------
         # 1) TRUE WIND + TRUE SOURCE → TRUE PLUME (Ground Truth)
-        # ----------------------------------------------------
         u_true = air.ground_truth.sub(0).collapse()
 
         gas.reset_wind(u_true)
@@ -233,22 +237,17 @@ class SingleExperiment:
         sigma = self.sigma_factor * gas.Lx
         gas.set_true_gaussian_source(self.x0, self.y0, sigma, amplitude=self.amplitude)
 
-        # Ground truth fields (copy AFTER setting true source)
         f_true = gas.f_true.copy()
         c_true = gas.dispersion_for_true_source().copy()
 
-        # ----------------------------------------------------
         # 2) Wind Reconstruction (if not oracle case)
-        # ----------------------------------------------------
         if not self.use_true_wind:
             air.reset_random_measurements(self.p_wind, self.wind_seed)
             u_est = air.solve(maxit=5).sub(0).collapse()
         else:
             u_est = u_true
 
-        # ----------------------------------------------------
         # 3) Gas Reconstruction USING estimated wind
-        # ----------------------------------------------------
         gas.reset_wind(u_est)
         gas.reset_random_measurements(self.p_gas, seed=self.gas_seed)
 
@@ -261,22 +260,15 @@ class SingleExperiment:
 
         c_est = gas.c_est.copy()
 
-        # ----------------------------------------------------
         # 4) Measurement coordinates
-        # ----------------------------------------------------
         gas_coords = gas.get_measurement_coordinates()
         wind_coords = None if self.use_true_wind else air.get_measurement_coordinates()
 
-        # ----------------------------------------------------
         # 5) Source locations from DOF arrays
-        # ----------------------------------------------------
         coords = gas.scalar_space.tabulate_dof_coordinates()
         true_loc = coords[np.argmax(f_true.x.array)]
         est_loc  = coords[np.argmax(f_est.x.array)]
 
-        # ----------------------------------------------------
-        # 6) Build result object
-        # ----------------------------------------------------
         return SingleExperimentResult(
             true_location=true_loc,
             est_location=est_loc,

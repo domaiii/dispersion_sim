@@ -6,7 +6,7 @@ from dolfinx import fem
 from tools.airflow_estimator import AirflowEstimator
 from tools.gas_estimator import GasSourceEstimator
 from tools.visualizer import Visualizer2D
-from tools.experiment import SingleExperiment, SingleExperimentResult
+from tools.experiment import SingleExperiment, SingleExperimentResult, ErrorValue
 
 # -------------------------------------------------------------
 # 1. Load mesh + wind ground truth + gas estimator
@@ -53,7 +53,7 @@ source_locations = [(0.1 * gas_new.Lx, 0.3 * gas_new.Ly),
                     # (0.5 * gas_new.Lx, 0.4 * gas_new.Ly), 
                     (0.4 * gas_new.Lx, 0.85 * gas_new.Ly), 
                     (0.35 * gas_new.Lx, 0.8 * gas_new.Ly), 
-                    # (0.38 * gas_new.Lx, 0.3 * gas_new.Ly), 
+                    (0.38 * gas_new.Lx, 0.3 * gas_new.Ly), 
                     (0.5 * gas_new.Lx, 0.75 * gas_new.Ly)]
 
 # Visual sanity check
@@ -62,65 +62,9 @@ vis.add_background_mesh()
 vis.add_points(source_locations, color="red", size=16)
 vis.show("Candidate Source Locations")
 
-sample_sizes = [25, 50, 100, 200, 400, 1000]
+sample_sizes = [25, 50, 100, 200, 400, 800]
 
 gas_gamma_reg = 1e-3
-
-# to be deleted afterwards!
-def debug_stopper(result, result_oracle, gas_est, x0, y0):
-    """Debug only when localization error with reconstructed wind is better."""
-
-    if False: # result.localization_error() >= result_oracle.localization_error():
-        return  # nothing to debug
-
-    # Extract points
-    true_pt_rec   = result.true_location
-    true_pt_oracle   = result.true_location
-    reco_pt   = result.est_location
-    oracle_pt = result_oracle.est_location  # estimated location with true wind
-
-    print("\n\n===== DEBUG TRIGGERED (Localization Worse With Reconstructed Wind) =====")
-    print(f"True location reco           : ({true_pt_rec[0]:.4f}, {true_pt_rec[1]:.4f})")
-    print(f"True location oracle         : ({true_pt_oracle[0]:.4f}, {true_pt_oracle[1]:.4f})")
-    print(f"Estimated (reconstructed)    : ({reco_pt[0]:.4f}, {reco_pt[1]:.4f})")
-    print(f"Estimated (oracle true wind) : ({oracle_pt[0]:.4f}, {oracle_pt[1]:.4f})")
-    print("")
-    print(f"Oracle loc error      : {result_oracle.localization_error():.4f}")
-    print(f"Reco-wind loc error   : {result.localization_error():.4f}")
-    print("")
-    print(f"Oracle plume error    : {result_oracle.abs_plume_error():.4f}")
-    print(f"Reco plume error      : {result.abs_plume_error():.4f}")
-    print("\nVisualization open — close windows and press ENTER to continue.\n")
-
-    # === Plot reconstructed plume and the three locations ===
-    vis = Visualizer2D(gas_est.scalar_space)
-    vis.add_scalar_field("Estimated source term (reconstructed wind)", result.f_est, cmap="coolwarm")
-    vis.add_points([reco_pt], label="reconstructed source max")
-    vis.add_points([true_pt_rec], "green", label="true source max")
-
-    vis.show("RECONSTRUCTED WIND")
-
-    vis2 = Visualizer2D(gas_est.scalar_space)
-    vis2.add_scalar_field("Estimated source term (with true wind)", result_oracle.f_est, cmap="coolwarm")
-    vis2.add_points([oracle_pt],label="reconstructed source max")
-    vis2.add_points([true_pt_rec], "green", label="true source max")
-    vis2.show("TRUE WIND")
-
-    # vis3 = Visualizer2D(gas_est.scalar_space)
-    # vis3.add_scalar_field("Estimated plume (with true wind)", result_oracle.c_est, cmap="coolwarm")
-    # vis3.add_points([oracle_pt])
-    # vis3.show("DEBUG — Localization Failure")
-
-    # vis4 = Visualizer2D(gas_est.scalar_space)
-    # vis4.add_scalar_field("True plume (with true wind)", result_oracle.c_true, cmap="coolwarm")
-    # vis4.add_points([oracle_pt])
-    # vis4.show("DEBUG — Localization Failure")
-
-    # vis4 = Visualizer2D(gas_est.scalar_space)
-    # vis4.add_scalar_field("True plume (with recostructed wind)", result.c_true, cmap="coolwarm")
-    # vis4.add_points([oracle_pt])
-    # vis4.show("DEBUG — Localization Failure")
-
 
 def run_experiment_grid(
         air_est, gas_est,
@@ -132,7 +76,7 @@ def run_experiment_grid(
         sigma_factor=0.01,
         gamma_reg=5e-2,
         amplitude=10.0,
-        outfile="test_bug_exp.parquet"
+        outfile="exp1.parquet"
     ):
 
     rows = []
@@ -183,18 +127,25 @@ def run_experiment_grid(
                     result_oracle = exp_oracle.run_L1(verbose=False)
 
                     rows.append({
+                        # Parameters
                         "p_wind": np.inf,
                         "p_gas": p_gas,
                         "source_x": x0,
                         "source_y": y0,
                         "wind_seed": -1,
                         "gas_seed": g_seed,
+
+                        # Error metrics
                         "loc_error": result_oracle.localization_error(),
-                        "plume_L2": result_oracle.abs_plume_error(),
-                        "rel_plume_L2": result_oracle.rel_plume_error(),
-                        "wind_L2": 0.0,
-                        "rel_wind_L2": 0.0,
-                        "source_L2" : result_oracle.abs_source_error(),
+                        "plume_L2": result_oracle.plume_error().L2,
+                        "plume_RMS": result_oracle.plume_error().RMS,
+                        "normalized_plume_err_L2": result_oracle.plume_error_norm().L2,
+                        "normalized_plume_err_RMS": result_oracle.plume_error_norm().RMS,
+
+                        # no wind estimation -> no wind data
+
+                        "source_L2" : result_oracle.source_error().L2,
+                        "source_RMS" : result_oracle.source_error().RMS,
                         "wind_source": "true",
                     })
 
@@ -225,24 +176,38 @@ def run_experiment_grid(
                         result = exp.run_L1(verbose=False)
 
                         rows.append({
+                            # Parameters
                             "p_wind": p_wind,
                             "p_gas": p_gas,
                             "source_x": x0,
                             "source_y": y0,
                             "wind_seed": w_seed,
                             "gas_seed": g_seed,
+
+                            # Plume error metrics
                             "loc_error": result.localization_error(),
-                            "plume_L2": result.abs_plume_error(),
-                            "rel_plume_L2": result.rel_plume_error(),
-                            "wind_L2": result.abs_wind_error(),
-                            "rel_wind_L2": result.rel_wind_error(),
-                            "source_L2" : result.abs_source_error(),
+                            "plume_L2": result.plume_error().L2,
+                            "plume_RMS": result.plume_error().RMS,
+                            "normalized_plume_err_L2": result.plume_error_norm().L2,
+                            "normalized_plume_err_RMS": result.plume_error_norm().RMS,
+
+                            # Wind error metrics
+                            "wind_L2": result.wind_error().L2,
+                            "wind_RMS": result.wind_error().RMS,
+                            "rel_wind_L2": result.wind_error_rel(),
+                            "angular_wind_err_L2": result.angular_wind_error().L2,
+                            "angular_wind_err_RMS": result.angular_wind_error().RMS,
+                            "magnitude_err_L2": result.magnitude_wind_error().L2,
+                            "magnitude_err_RMS": result.magnitude_wind_error().RMS,
+
+                            # Source error metrics
+                            "source_L2" : result.source_error().L2,
+                            "source_RMS" : result.source_error().RMS,
+
                             "wind_source": "reconstructed",
                         })
 
                         gas_est.reset()
-
-                        #debug_stopper(result, result_oracle, gas_est, x0, y0)
 
     df = pd.DataFrame(rows)
     df.to_parquet(outfile, index=False)
