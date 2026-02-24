@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import pyvista as pv
 from scipy.io import savemat
@@ -11,7 +12,9 @@ class Visualizer2D:
         self.topology, self.cell_type, self.geom = plot.vtk_mesh(function_space)
         self.grid = pv.UnstructuredGrid(self.topology, self.cell_type, self.geom)
         self.has_points = False
-        self.plotter = pv.Plotter(window_size=window_size)
+
+        head = os.environ.get("DISPLAY") is None or os.environ.get("PYVISTA_OFF_SCREEN") == "true"
+        self.plotter = pv.Plotter(window_size=window_size, off_screen=head)
         
         # Tracks the active scalar bar actor for removal (ensures only one is shown)
         self._active_scalar_bar_actor = None
@@ -114,23 +117,42 @@ class Visualizer2D:
         """
         self.plotter.add_mesh(self.grid, color="gray", opacity=opacity, show_edges=gridlines)
 
-    def show(self, title: str = None, zoom: float = 1.0):
-        """
-        Displays the plot.
-        
-        FIX: Changed 'self.plotter.mesh_actors' to check for any actors 
-        in 'self.plotter.actors', which is the currently supported way in modern PyVista.
-        """
-        self.plotter.view_xy()
-        self.plotter.add_axes()
-        # Add legend
-        if self.has_points:
-            self.plotter.add_legend(face="circle", size=(0.15, 0.1)) 
+    def show(self, title: str = None, zoom: float = 1.0, filename: str = "plot_output.png"):
+            """
+            Show the plot or save it to file if no graphical interface is available.
+            """
+            self.plotter.view_xy()
+            self.plotter.add_axes()
             
-        if title:
-            self.plotter.add_text(title, position="upper_edge", font_size=16, color="black")
-        self.plotter.zoom_camera(zoom)
-        self.plotter.show()
+            if self.has_points:
+                self.plotter.add_legend(face="circle", size=(0.15, 0.1)) 
+                
+            if title:
+                self.plotter.add_text(title, position="upper_edge", font_size=16, color="black")
+            
+            self.plotter.zoom_camera(zoom)
+
+            if self.plotter.off_screen:
+                out_path = Path(filename)
+                if out_path.exists():
+                    stem = out_path.stem
+                    suffix = out_path.suffix
+                    parent = out_path.parent
+                    candidate = parent / f"{stem}_1{suffix}"
+                    idx = 2
+                    while candidate.exists():
+                        candidate = parent / f"{stem}_{idx}{suffix}"
+                        idx += 1
+                    out_path = candidate
+
+                print(f"[Visualizer2D] Headless Mode: Saving screenshot to {out_path}")
+                os.environ['GALLIUM_DRIVER'] = 'llvmpipe'
+                pv.start_xvfb()
+                self.plotter.show(screenshot=str(out_path))
+            else:
+                self.plotter.show()
+
+                  
 
     @staticmethod
     def export_function_matlab(f: fem.Function, filename: str | Path):

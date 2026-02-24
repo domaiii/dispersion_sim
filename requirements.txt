@@ -1,0 +1,5 @@
+jupyterlab
+pandas
+scipy
+pyvista
+adios4dolfinx

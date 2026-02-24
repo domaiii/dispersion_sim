@@ -2,4 +2,5 @@
 *.xdmf
 __pycache__
 *.gif
+*.png
 .vscode/
