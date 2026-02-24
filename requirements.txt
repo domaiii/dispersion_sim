@@ -1,5 +1,6 @@
 jupyterlab
 pandas
+pygmsh
 scipy
 pyvista
 adios4dolfinx
