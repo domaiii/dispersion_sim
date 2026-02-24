@@ -10,52 +10,82 @@ from petsc4py import PETSc
 
 class GasSourceEstimator:
 
-    def __init__(self, domain: mesh.Mesh, wind: fem.Function, D_phys: float | None = 1e-3):
+    def __init__(self, 
+                domain: mesh.Mesh, 
+                wind: fem.Function | None = None, 
+                D_phys: float = 1e-3):
+
         self.domain = domain
+
+        # ----------------------------------------------------
+        # Wind field
+        # ----------------------------------------------------
+        if wind is None:
+            Vwind = fem.functionspace(
+                domain,
+                element("CG", domain.basix_cell(), 2, shape=(domain.geometry.dim,))
+            )
+            wind = fem.Function(Vwind)
+            wind.x.array[:] = 0.0
+            self.has_wind = False
+        else:
+            self.has_wind = True
+
         self.wind_field = wind
-        if D_phys is None:
-            D_phys = 1e-3
+
         self.D_phys = fem.Constant(domain, PETSc.ScalarType(D_phys))
 
-        # Derive function space
-        elem = wind.function_space.ufl_element()
-        degree = elem.sub_elements[0].degree if hasattr(elem, "sub_elements") else elem.degree
+        w_elem = wind.function_space.ufl_element()
+        if hasattr(w_elem, "sub_elements"):
+            degree = w_elem.sub_elements[0].degree
+        else:
+            degree = w_elem.degree
+
         if isinstance(degree, tuple):
             degree = max(degree)
 
-        self.scalar_space = fem.functionspace(domain, element("CG", domain.basix_cell(), degree))
+        self.scalar_space = fem.functionspace(
+            domain, element("CG", domain.basix_cell(), degree)
+        )
 
-        self.u = ufl.TrialFunction(self.scalar_space)
-        self.v = ufl.TestFunction(self.scalar_space)
+        self.source_est = fem.Function(self.scalar_space, name="source")
+        self.residual   = fem.Function(self.scalar_space, name="residual")
+        self.c_est      = None
+        self.f_true     = None
 
-        self.source = fem.Function(self.scalar_space, name="source")
-        self.concentration = fem.Function(self.scalar_space, name="concentration")
-        self.residual = fem.Function(self.scalar_space, name="residual")
-
-        # Geometry
         coords = domain.geometry.x
-        self.x_min, self.y_min = np.min(coords[:, 0]), np.min(coords[:, 1])
-        self.x_max, self.y_max = np.max(coords[:, 0]), np.max(coords[:, 1])
+        self.x_min, self.y_min = np.min(coords[:, :2], axis=0)
+        self.x_max, self.y_max = np.max(coords[:, :2], axis=0)
         self.Lx = self.x_max - self.x_min
         self.Ly = self.y_max - self.y_min
 
-        # SUPG parameter
         self.tau = self._build_supg_parameters()
+        self.bcs: list[fem.DirichletBC] = [self._build_default_bc()]
 
-        # BCs
-        self.bcs: list[fem.DirichletBC] = []
-        self.bcs.append(self._build_default_bc())
-
-        # Build problems
         self.forward_problem = self._build_forward_problem()
         self.adjoint_problem = self._build_adjoint_problem()
 
-        # Measurements
         self.m_ids = None
-        self.m = None
+        self.m     = None
 
-        # Optional ground truth
-        self.f_true = None
+    def set_true_gaussian_source(self, x: float, y: float, sigma: float, amplitude: float = 1.0):
+        """
+        Convenience function to define a Gaussian true source centered at (x, y).
+        """
+        f_new = fem.Function(self.scalar_space, name="f_true_gaussian")
+
+        def gaussian(xx):
+            x0, y0 = x, y
+            return amplitude * np.exp(
+                -((xx[0] - x0) ** 2 + (xx[1] - y0) ** 2) / (2 * sigma**2)
+            )
+
+        f_new.interpolate(gaussian)
+
+        # Store as ground truth (also updates ground-truth concentration)
+        self.set_ground_truth(f_new)
+
+        return f_new
 
     def set_ground_truth(self, f_true: fem.Function):
         if f_true.function_space != self.scalar_space:
@@ -63,43 +93,102 @@ class GasSourceEstimator:
         
         self.f_true = fem.Function(self.scalar_space, name="f_true")
         self.f_true.x.array[:] = f_true.x.array.copy()
-        self.get_ground_truth_concentration()
-
-        return self.f_true
     
-    def get_ground_truth_concentration(self):
+    def dispersion_for_true_source(self):
         if self.f_true is None:
             raise RuntimeError("No ground truth source has been set.")
 
         # Backup 
-        backup = self.source.x.array.copy()
+        backup = self.source_est.x.array.copy()
 
         # Use true source
-        self.source.x.array[:] = self.f_true.x.array
+        self.source_est.x.array[:] = self.f_true.x.array
         forward_problem = self._build_forward_problem()
         c_true = forward_problem.solve()
 
         # Restore actual inversion
-        self.source.x.array[:] = backup
+        self.source_est.x.array[:] = backup
 
         return c_true
     
-    def generate_measurements_from_ground_truth(self, p: int, seed: int = 1):
+    def reset(self):
+        """
+        Completely reset the estimator state after running an experiment.
+        Clears source estimate, plume estimate, measurements, and adjoint RHS.
+        """
+        # Reset source estimate
+        if self.source_est is not None:
+            self.source_est.x.array[:] = 0.0
+
+        # Reset concentration estimate
+        self.c_est = None
+
+        # Reset measurements (indices + values)
+        self.m_ids = None
+        self.m = None
+
+        # Reset adjoint residual
+        if self.residual is not None:
+            self.residual.x.array[:] = 0.0
+    
+    # def reset_random_measurements(self, p: int, seed: int = 1):
+    #     if self.f_true is None:
+    #         raise RuntimeError("Set ground truth f_true first using set_ground_truth().")
+
+    #     # Always recompute GT concentration cleanly
+    #     c_true = self.dispersion_for_true_source()
+
+    #     rng = np.random.default_rng(seed)
+    #     n = c_true.x.array.size
+
+    #     m_ids = rng.choice(np.arange(n), size=p, replace=False)
+    #     m_values = c_true.x.array[m_ids].copy()
+
+    #     self.set_measurements(m_ids, m_values)
+
+    def reset_random_measurements(self, p: int, seed: int = 1):
+        """
+        Sample gas measurements only from valid DOFs inside the domain,
+        excluding outer boundary layers (SUPG-sensitive).
+        """
         if self.f_true is None:
             raise RuntimeError("Set ground truth f_true first using set_ground_truth().")
 
-        # Always recompute GT concentration cleanly
-        c_true = self.get_ground_truth_concentration()
+        c_true = self.dispersion_for_true_source()
 
         rng = np.random.default_rng(seed)
-        n = c_true.x.array.size
 
-        m_ids = rng.choice(np.arange(n), size=p, replace=False)
+        coords = self.scalar_space.tabulate_dof_coordinates()
+        x = coords[:, 0]
+        y = coords[:, 1]
+
+        xmin, xmax = x.min(), x.max()
+        ymin, ymax = y.min(), y.max()
+        Lx = xmax - xmin
+        Ly = ymax - ymin
+
+        margin_x = 0.05 * Lx
+        margin_y = 0.05 * Ly
+
+        interior_dofs = np.where(
+            (x > xmin + margin_x) &
+            (x < xmax - margin_x) &
+            (y > ymin + margin_y) &
+            (y < ymax - margin_y)
+        )[0]
+
+        if len(interior_dofs) < p:
+            raise ValueError(
+                f"Requested {p} gas samples, but only {len(interior_dofs)} valid "
+                "interior DOFs are available. Reduce p_gas or margin thickness."
+            )
+
+        # --- 5) Stichprobe ziehen ---
+        m_ids = rng.choice(interior_dofs, size=p, replace=False)
         m_values = c_true.x.array[m_ids].copy()
 
+        # --- 6) Speichern ---
         self.set_measurements(m_ids, m_values)
-
-        return m_ids, m_values
 
     def _build_default_bc(self):
         """
@@ -130,209 +219,203 @@ class GasSourceEstimator:
     def set_measurements(self, m_ids: np.ndarray, m_values: np.ndarray):
         self.m_ids = np.asarray(m_ids, dtype=np.int32)
         self.m = np.asarray(m_values, dtype=float)
-
-    def set_measurements_from_distribution(self, c_true: fem.Function, m_ids: np.ndarray):
-        self.m_ids = np.asarray(m_ids, dtype=np.int32)
-        self.m = c_true.x.array[self.m_ids].copy()
+    
+    def get_measurement_coordinates(self) -> np.ndarray:
+        if self.m_ids is None:
+            raise RuntimeError("No gas measurements set yet.")
+        
+        coords = self.scalar_space.tabulate_dof_coordinates()
+        return coords[self.m_ids]
 
     def solve_forward(self) -> fem.Function:
+        if not self.has_wind:
+            raise RuntimeError("No wind field set yet, but is required to solve forward problem.")
         self.c = self.forward_problem.solve()
         return self.c
     
-    def reinitialize(self, wind: fem.Function):
+    def reset_wind(self, wind: fem.Function):
         """
         Update wind field and all members/structures depending on it to allow reusing the instance
         for multiple experiments without creating a new GasSourceEstimator every time.
         """
         # reset
         self.wind_field = wind
+        self.has_wind = True
         self.tau = self._build_supg_parameters()
 
         self.forward_problem = self._build_forward_problem()
         self.adjoint_problem = self._build_adjoint_problem()
 
-        # Depend on wind field as well
         self.m_ids = None
         self.m = None
 
-    def solve_L1(self,
-                 gamma_reg: float = 1e-2,
-                 max_it: int = 50,
-                 alpha0: float = 1.0,
-                 tol_rel: float = 1e-4,
-                 tol_grad: float = 1e-4,
-                 c_arm: float = 1e-3,
-                 rho: float = 0.5,
-                 verbose: bool = True):
-        
-        if self.m_ids is None or self.m is None:
-            raise RuntimeError("No measurements set. Call set_measurements(...) first.")
+    # def solve_L1(self, **kw):
+    #     return self._solve_inverse("L1", **kw)
+
+    # def solve_L2(self, **kw):
+    #     return self._solve_inverse("L2", **kw)
+
+    def solve_L1(
+        self,
+        gamma_reg: float = 1e-2,
+        max_it: int = 50,
+        alpha0: float = 1.0,
+        tol_rel: float = 1e-4,
+        tol_grad: float = 1e-4,
+        c_arm: float = 1e-3,
+        rho: float = 0.5,
+        verbose: bool = True,
+    ):
+        return self._solve_inverse(
+            reg="L1",
+            gamma_reg=gamma_reg,
+            max_it=max_it,
+            alpha0=alpha0,
+            tol_rel=tol_rel,
+            tol_grad=tol_grad,
+            c_arm=c_arm,
+            rho=rho,
+            verbose=verbose,
+        )
+
+
+    def solve_L2(
+        self,
+        gamma_reg: float = 1e-2,
+        max_it: int = 200,
+        alpha0: float = 1.0,
+        tol_rel: float = 1e-7,
+        tol_grad: float = 1e-8,
+        c_arm: float = 1e-3,
+        rho: float = 0.5,
+        verbose: bool = True,
+    ):
+        return self._solve_inverse(
+            reg="L2",
+            gamma_reg=gamma_reg,
+            max_it=max_it,
+            alpha0=alpha0,
+            tol_rel=tol_rel,
+            tol_grad=tol_grad,
+            c_arm=c_arm,
+            rho=rho,
+            verbose=verbose,
+        )
+
+    def _solve_inverse(self,
+                    reg,
+                    gamma_reg=1e-2,
+                    max_it=50,
+                    alpha0=1.0,
+                    tol_rel=1e-4,
+                    tol_grad=1e-4,
+                    c_arm=1e-3,
+                    rho=0.5,
+                    verbose=True):
+
+        if self.m_ids is None:
+            raise RuntimeError("No measurements set.")
 
         m_ids = self.m_ids
         m = self.m
-        f = self.source
-        residual = self.residual
+        f = self.source_est
+        r = self.residual
 
-        f.x.array[:] = 0.0  # Start at f=0
-
-        misfit_hist = []
-        alpha_hist = []
+        f.x.array[:] = 0.0
         alpha = alpha0 / rho
 
-        def compute_misfit(c_func: fem.Function, f_func: fem.Function):
-            r = c_func.x.array[m_ids] - m
-            return np.dot(r, r) + 0.5 * gamma_reg * np.sum(np.abs(f_func.x.array))
+        misfits = []
+        alphas = []
 
+        # ----- choose L1 or L2 templates -----
+        if reg == "L1":
+            misfit = lambda c: np.dot(c.x.array[m_ids]-m, c.x.array[m_ids]-m) \
+                            + 0.5*gamma_reg*np.sum(np.abs(f.x.array))
+            grad   = lambda adj: -adj.x.array
+            prox   = lambda f_old, a, g: np.maximum(
+                            0.0,
+                            np.sign(f_old-a*g) *
+                            np.maximum(np.abs(f_old-a*g)-a*gamma_reg, 0.0)
+                        )
+
+        elif reg == "L2":
+            misfit = lambda c: 0.5*np.dot(c.x.array[m_ids]-m, c.x.array[m_ids]-m) \
+                            + 0.5*gamma_reg*np.dot(f.x.array, f.x.array)
+            grad   = lambda adj: -adj.x.array + gamma_reg*f.x.array
+            prox   = lambda f_old, a, g: np.maximum(0.0, f_old - a*g)
+
+        else:
+            raise ValueError("reg must be 'L1' or 'L2'")
+
+        # --------- main loop ----------
         for it in range(max_it):
 
             alpha /= rho
-
             c = self.solve_forward()
-            mis = compute_misfit(c, f)
+            J = misfit(c)
 
-            residual.x.array[:] = 0.0
-            residual.x.array[m_ids] = -(c.x.array[m_ids] - m)
+            # build adjoint RHS
+            r.x.array[:] = 0.0
+            r.x.array[m_ids] = -(c.x.array[m_ids]-m)
             adj = self.adjoint_problem.solve()
 
-            gradJ = -adj.x.array
-            grad_norm = np.linalg.norm(gradJ)
-
+            g = grad(adj)
+            gnorm = np.linalg.norm(g)
             f_old = f.x.array.copy()
 
             # Armijo
-            alpha_local = alpha
+            a = alpha
             while True:
-                y = f_old - alpha_local * gradJ
-                f.x.array[:] = np.sign(y) * np.maximum(np.abs(y) - alpha_local * gamma_reg, 0.0)
-                f.x.array[:] = np.maximum(f.x.array, 0.0)
+                f.x.array[:] = prox(f_old, a, g)
 
                 c_trial = self.solve_forward()
-                mis_trial = compute_misfit(c_trial, f)
+                J_trial = misfit(c_trial)
 
-                if mis_trial <= mis - c_arm * alpha_local * grad_norm**2:
+                if J_trial <= J - c_arm * a * gnorm**2:
                     break
 
-                alpha_local *= rho
-                if alpha_local < 1e-10:
-                    print("Step size too small.")
-                    break
-
-            alpha = alpha_local
-
-            misfit_hist.append(mis_trial)
-            alpha_hist.append(alpha)
-
-            if verbose and (it % 10 == 0 or it == max_it - 1):
-                print(f"it {it:3d} mis={mis:.3e} ||grad||={grad_norm:.3e} α={alpha:.2e}")
-
-            # Convergence criteria
-            if it > 1:
-                rel_change = abs(misfit_hist[-2] - misfit_hist[-1]) / max(1e-12, misfit_hist[-2])
-                if rel_change < tol_rel or grad_norm < tol_grad:
+                a *= rho
+                if a < 1e-12:
                     if verbose:
-                        print(f"Stopped at it {it}, rel_change={rel_change:.3e}")
+                        print("Step size too small.")
                     break
 
-        self.misfit_hist_L1 = np.array(misfit_hist)
-        self.alpha_hist_L1 = np.array(alpha_hist)
-        return self.source
+            alpha = a
+            misfits.append(J_trial)
+            alphas.append(a)
 
-    def solve_L2(self,
-                gamma_reg: float = 1e-2,
-                max_it: int = 200,
-                alpha0: float = 1.0,
-                tol_rel: float = 1e-7,
-                tol_grad: float = 1e-8,
-                c_arm: float = 1e-3,
-                rho: float = 0.5,
-                verbose: bool = True):
+            if verbose and (it % 10 == 0 or it == max_it-1):
+                print(f"it {it:3d} mis={J:.3e} ||grad||={gnorm:.3e} a={alpha:.2e}")
 
-        if self.m_ids is None or self.m is None:
-            raise RuntimeError("No measurements set. Use set_measurements(...) first.")
-
-        m_ids = self.m_ids
-        m = self.m
-        f = self.source
-        residual = self.residual
-
-        f.x.array[:] = 0.0
-
-        misfit_hist = []
-        alpha_hist = []
-
-        # Schrittweite starten
-        alpha = alpha0 / rho
-
-        def compute_misfit(c_func: fem.Function, f_func: fem.Function):
-            r = c_func.x.array[m_ids] - m
-            return 0.5 * np.dot(r, r) + 0.5 * gamma_reg * np.dot(f_func.x.array, f_func.x.array)
-
-        for it in range(max_it):
-
-            # Schrittweite für neue Iteration erhöhen
-            alpha /= rho
-
-            c = self.solve_forward()
-            mis = compute_misfit(c, f)
-
-            # Adjoint RHS
-            residual.x.array[:] = 0.0
-            residual.x.array[m_ids] = -(c.x.array[m_ids] - m)
-            adj = self.adjoint_problem.solve()
-
-            # Gradient
-            gradJ = -adj.x.array + gamma_reg * f.x.array
-            grad_norm = np.linalg.norm(gradJ)
-
-            f_old = f.x.array.copy()
-
-            # Local Armijo
-            alpha_local = alpha
-            while True:
-                f.x.array[:] = f_old - alpha_local * gradJ
-                f.x.array[:] = np.maximum(f.x.array, 0.0)
-                c_trial = self.solve_forward()
-                mis_trial = compute_misfit(c_trial, f)
-
-                if mis_trial <= mis - c_arm * alpha_local * grad_norm**2:
-                    break
-
-                alpha_local *= rho
-                if alpha_local < 1e-14:
-                    print("Step size too small.")
-                    break
-
-            # Übernommene Schrittweite für nächste Iteration merken
-            alpha = alpha_local
-
-            misfit_hist.append(mis_trial)
-            alpha_hist.append(alpha)
-
-            if verbose and (it % 10 == 0 or it == max_it - 1):
-                print(f"it {it:3d} mis={mis:.3e} ||grad||={grad_norm:.3e} α={alpha:.2e}")
-
-            # Convergence
-            if it > 1:
-                rel_change = abs(misfit_hist[-2] - misfit_hist[-1]) / max(1e-12, misfit_hist[-2])
-                if rel_change < tol_rel or grad_norm < tol_grad:
+            # stopping
+            if it > 2:
+                rel = abs(misfits[-2] - misfits[-1]) / max(1e-12, misfits[-2])
+                if rel < tol_rel or gnorm < tol_grad:
                     if verbose:
-                        print(f"Stopped at it {it}, rel_change={rel_change:.3e}")
+                        print(f"Stopped at it {it}, rel_change={rel:.3e}")
                     break
 
-        self.misfit_hist_L2 = np.array(misfit_hist)
-        self.alpha_hist_L2 = np.array(alpha_hist)
-        return self.source
+        # save
+        self.c_est = self.solve_forward()
+        if reg == "L1":
+            self.misfit_hist_L1 = np.array(misfits)
+            self.alpha_hist_L1  = np.array(alphas)
+        else:
+            self.misfit_hist_L2 = np.array(misfits)
+            self.alpha_hist_L2  = np.array(alphas)
+
+        return self.source_est
 
     def estimated_source_max_location(self) -> np.ndarray:
         """
         Liefert die Koordinate des DOFs, an dem f(x) maximal ist.
         """
         coords = self.scalar_space.tabulate_dof_coordinates()
-        idx_max = np.argmax(self.source.x.array)
+        idx_max = np.argmax(self.source_est.x.array)
         return coords[idx_max]
 
     def estimated_source_max_value(self) -> float:
-        return float(np.max(self.source.x.array))
+        return float(np.max(self.source_est.x.array))
     
     def _build_supg_parameters(self):
         beta = self.wind_field
@@ -347,9 +430,10 @@ class GasSourceEstimator:
         return tau
 
     def _build_forward_problem(self):
-        u, v = self.u, self.v
+        u = ufl.TrialFunction(self.scalar_space)
+        v = ufl.TestFunction(self.scalar_space)
         beta = self.wind_field
-        f = self.source
+        f = self.source_est
         D = self.D_phys
         tau = self.tau
 
@@ -362,7 +446,7 @@ class GasSourceEstimator:
         return LinearProblem(a, L, self.bcs)
 
     def _build_adjoint_problem(self):
-        v = self.v
+        v = ufl.TestFunction(self.scalar_space)
         beta = self.wind_field
         D = self.D_phys
         residual = self.residual

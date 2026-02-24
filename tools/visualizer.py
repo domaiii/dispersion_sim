@@ -1,7 +1,8 @@
 import numpy as np
 import pyvista as pv
-
-from dolfinx import fem, plot
+from scipy.io import savemat
+from pathlib import Path
+from dolfinx import fem, plot, mesh
 
 class Visualizer2D:
 
@@ -9,7 +10,7 @@ class Visualizer2D:
         self.function_space = function_space
         self.topology, self.cell_type, self.geom = plot.vtk_mesh(function_space)
         self.grid = pv.UnstructuredGrid(self.topology, self.cell_type, self.geom)
-
+        self.has_points = False
         self.plotter = pv.Plotter(window_size=window_size)
         
         # Tracks the active scalar bar actor for removal (ensures only one is shown)
@@ -73,19 +74,31 @@ class Visualizer2D:
         vec3d = np.hstack((vec2d, np.zeros((vec2d.shape[0], 1))))
         self.grid.point_data[name] = vec3d
 
-        subset = self.grid.extract_points(np.arange(self.grid.n_points))
+        subset = self.grid.extract_points(np.arange(0, self.grid.n_points, 2), include_cells=False)
         glyphs = subset.glyph(orient=name, scale=name, factor=factor)
         
         self.plotter.add_mesh(glyphs, cmap="coolwarm", 
                               scalar_bar_args={**self.scalar_bar_args, "title": f"{name} Magnitude"})
 
-    def add_points(self, coords: np.ndarray, 
+    def add_points(self, coords: list | tuple | np.ndarray, 
                    color: str | None = None, size: int | None = None, label: str | None = None):
         """
-        Adds points to the plot with an explicit label for the legend.
+        Add 2D or 3D point coordinates. Accepts list, tuple, or ndarray.
         """
+        # Convert list/tuple -> ndarray
+        coords = np.asarray(coords)
+
+        # Guarantee correct shape
+        if coords.ndim == 1:
+            coords = coords.reshape(1, -1)
+
+        # Convert to 3D if needed
+        if coords.shape[1] == 2:
+            coords = np.column_stack([coords, np.zeros(len(coords))])
+
         if size is None: size = 10
         if color is None: color = "red"
+        if label is not None: self.has_points = True
         
         pts = pv.PolyData(coords)
         self.plotter.add_mesh(
@@ -110,12 +123,109 @@ class Visualizer2D:
         """
         self.plotter.view_xy()
         self.plotter.add_axes()
-        
         # Add legend
-        if self.plotter.actors:
+        if self.has_points:
             self.plotter.add_legend(face="circle", size=(0.15, 0.1)) 
             
         if title:
             self.plotter.add_text(title, position="upper_edge", font_size=16, color="black")
         self.plotter.zoom_camera(zoom)
         self.plotter.show()
+
+    @staticmethod
+    def export_function_matlab(f: fem.Function, filename: str | Path):
+        """
+        Export a dolfinx Function (scalar or vector) and the P1 mesh to a MATLAB .mat file.
+
+        Supports:
+            - scalar fields:  f : Ω -> R
+            - vector fields:  f : Ω -> R^2 (first 2 comps)
+            on triangular meshes.
+        """
+        mesh = f.function_space.mesh
+        tdim = mesh.topology.dim
+
+        # --- Ensure P1 triangle connectivity exists ---
+        mesh.topology.create_connectivity(tdim, 0)
+        conn = mesh.topology.connectivity(tdim, 0).array
+        num_cells = len(conn) // 3
+        cells = conn.reshape(num_cells, 3) + 1    # MATLAB = 1-based
+
+        # --- Extract geometry (2D only) ---
+        points = mesh.geometry.x[:, :2]
+
+        # --- Extract function values ---
+        arr = f.x.array
+        block = f.x.block_size
+
+        if block == 1:
+            # scalar function
+            U = arr.reshape(-1, 1)
+        elif block >= 2:
+            # vector function → take first two components
+            U = arr.reshape(-1, block)[:, :2]
+        else:
+            raise ValueError(f"Unsupported block size: {block}")
+
+        data = {
+            "cells": cells.astype(np.int32),
+            "points": points.astype(float),
+            "u": U.astype(float)
+        }
+
+        savemat(filename, data)
+        print(f"[export_matlab] Wrote MATLAB file: {filename}")
+
+    @staticmethod
+    def export_domain_matlab(mesh: mesh.Mesh, filename: str | Path, facet_tags=None):
+        """
+        Export a dolfinx 2D triangular P1 mesh to MATLAB.
+        
+        Saves:
+            - cells : (Nc x 3) int32   triangle connectivity (1-based)
+            - points: (Np x 2) double  coordinates
+            - facets (optional): boundary facet vertex pairs (1-based)
+            - facet_indices, facet_values (optional): tag structure
+        """
+        tdim = mesh.topology.dim
+
+        mesh.topology.create_connectivity(tdim, 0)
+        conn = mesh.topology.connectivity(tdim, 0).array
+        num_cells = len(conn) // 3
+        cells = conn.reshape(num_cells, 3) + 1  # MATLAB uses 1-based indexing
+
+        points = mesh.geometry.x[:, :2]
+
+        save_dict = {
+            "cells": cells.astype(np.int32),
+            "points": points.astype(float)
+        }
+
+        if facet_tags is not None:
+            # Connectivity: facets → vertices
+            mesh.topology.create_connectivity(1, 0)
+            f2v = mesh.topology.connectivity(1, 0)
+
+            # From adjacent list to Nx2 array
+            arr = f2v.array
+            offs = f2v.offsets
+            vert_lens = offs[1:] - offs[:-1]
+            if not np.all(vert_lens == 2):
+                bad = np.where(vert_lens != 2)[0]
+                raise RuntimeError(
+                    f"Facet(s) {bad} have {vert_lens[bad]} vertices, expected two. "
+                    "Mesh is not a pure triangular 2D mesh."
+                )           
+            
+            facets = np.column_stack((arr[offs[:-1]], arr[offs[:-1] + 1])) + 1   # 1-based
+
+            save_dict["facets"] = facets
+            save_dict["facet_indices"] = facet_tags.indices + 1
+            save_dict["facet_values"] = facet_tags.values
+
+        savemat(filename, save_dict) 
+        
+        if facet_tags is not None:
+            print(f"[export_domain] Saved MATLAB domain and facet tags: {filename})")
+        else:
+            print(f"[export_domain] Wrote MATLAB domain file: {filename}")

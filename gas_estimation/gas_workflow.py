@@ -27,7 +27,7 @@ f_true.interpolate(source_term)
 gas_est.set_ground_truth(f_true)
 
 # Generate random measurements
-gas_est.generate_measurements_from_ground_truth(100, seed=5)
+gas_est.reset_random_measurements(100, seed=5)
 
 # Estimate source
 gas_est.solve_L1(gamma_reg=0.001)
@@ -35,7 +35,7 @@ gas_est.solve_L1(gamma_reg=0.001)
 
 vis = Visualizer2D(gas_est.scalar_space, font_size=30)
 
-vis.add_scalar_field("source_estimate", gas_est.source)
+vis.add_scalar_field("source_estimate", gas_est.source_est)
 
 vis.add_points(gas_est.scalar_space.tabulate_dof_coordinates()[gas_est.m_ids], 
                color="orange", size=10, label="Measurements")

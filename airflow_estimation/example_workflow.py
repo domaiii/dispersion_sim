@@ -6,7 +6,8 @@ import matplotlib.pyplot as plt
 from mpi4py import MPI
 from dolfinx import fem
 from pathlib import Path
-from tools.airflow_estimator import AirflowEstimator, Visualizer2D
+from tools.airflow_estimator import AirflowEstimator
+from tools.visualizer import Visualizer2D
 
 # Example usage 
 bpfile   = Path("/home/dominik/git/dispersion_sim/wind_data/airflow_picard.bp")
@@ -33,7 +34,7 @@ facet_tags = est.facet_tags
 # No slip boundary condition
 u_D_no_slip = fem.Function(V)
 u_D_no_slip.x.array[:] = 0.0
-no_slip_names = ["Walls", "Obstacle1", "Obstacle2", "Obstacle3", "Obstacle4", "Obstacle5"]
+no_slip_names = ["Walls", "Obstacles"]
 dofs_local = np.concatenate([facet_tags.find(name_to_id[name]) for name in no_slip_names])
 dofs_no_slip = fem.locate_dofs_topological((W0, V), V.mesh.topology.dim - 1, dofs_local)
 
