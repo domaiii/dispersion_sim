@@ -3,4 +3,5 @@
 __pycache__
 *.gif
 *.png
+*.DS_Store
 .vscode/
