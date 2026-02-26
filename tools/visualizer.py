@@ -1,7 +1,10 @@
 import os
 import numpy as np
 import pyvista as pv
+import matplotlib.pyplot as plt
+import matplotlib.tri as mtri
 from scipy.io import savemat
+from scipy.spatial import cKDTree
 from pathlib import Path
 from dolfinx import fem, plot, mesh
 
@@ -251,3 +254,155 @@ class Visualizer2D:
             print(f"[export_domain] Saved MATLAB domain and facet tags: {filename})")
         else:
             print(f"[export_domain] Wrote MATLAB domain file: {filename}")
+
+
+class MatplotlibVisualizer2D:
+    """
+    2D visualizer for FEM meshes/fields using matplotlib.
+    Useful for clean static plots of vector fields on domains (also with holes).
+    """
+
+    def __init__(self, function_space: fem.FunctionSpace, figsize=(10, 5), dpi=160):
+        self.function_space = function_space
+        self.mesh = function_space.mesh
+        self.fig, self.ax = plt.subplots(figsize=figsize, dpi=dpi)
+        self._last_mappable = None
+
+        tdim = self.mesh.topology.dim
+        self.mesh.topology.create_connectivity(tdim, 0)
+        conn = self.mesh.topology.connectivity(tdim, 0).array
+
+        num_cells = len(conn) // 3
+        self.cells = conn.reshape(num_cells, 3)
+        self.points = self.mesh.geometry.x[:, :2]
+
+    def add_background_mesh(self, color="0.75", linewidth=0.25, alpha=0.9):
+        x = self.points[:, 0]
+        y = self.points[:, 1]
+        self.ax.triplot(x, y, self.cells, color=color, linewidth=linewidth, alpha=alpha)
+
+    def add_vector_field(
+        self,
+        name: str,
+        vector_func: fem.Function,
+        stride: int = 2,
+        cmap: str = "coolwarm",
+        scale: float | None = None,
+        width: float = 0.0022,
+    ):
+        bs = vector_func.function_space.dofmap.index_map_bs
+        if bs < 2:
+            raise ValueError(f"{name} must be a vector field with at least 2 components.")
+
+        coords = vector_func.function_space.tabulate_dof_coordinates()[:, :2]
+        values = vector_func.x.array.reshape(-1, bs)[:, :2]
+        mag = np.linalg.norm(values, axis=1)
+
+        stride = max(int(stride), 1)
+        coords = coords[::stride]
+        values = values[::stride]
+        mag = mag[::stride]
+
+        quiv = self.ax.quiver(
+            coords[:, 0],
+            coords[:, 1],
+            values[:, 0],
+            values[:, 1],
+            mag,
+            cmap=cmap,
+            angles="xy",
+            scale_units="xy",
+            scale=scale,
+            width=width,
+            pivot="mid",
+        )
+        self._last_mappable = quiv
+
+    def add_points(self, coords: np.ndarray, color="red", size=15, label: str | None = None):
+        coords = np.asarray(coords)
+        if coords.ndim == 1:
+            coords = coords.reshape(1, -1)
+        self.ax.scatter(coords[:, 0], coords[:, 1], c=color, s=size, label=label)
+
+    def add_streamplot(
+        self,
+        name: str,
+        vector_func: fem.Function,
+        nx: int = 220,
+        ny: int = 140,
+        density: float = 1.6,
+        cmap: str = "coolwarm",
+        linewidth: float = 1.0,
+        arrowsize: float = 1.0,
+    ):
+        """
+        Plot streamlines for a 2D vector field on a regular grid.
+        Grid points outside the mesh domain (including holes) are masked.
+        """
+        bs = vector_func.function_space.dofmap.index_map_bs
+        if bs < 2:
+            raise ValueError(f"{name} must be a vector field with at least 2 components.")
+
+        # Regular plotting grid in domain bounding box
+        x_min, y_min = np.min(self.points, axis=0)
+        x_max, y_max = np.max(self.points, axis=0)
+        xg = np.linspace(x_min, x_max, max(int(nx), 10))
+        yg = np.linspace(y_min, y_max, max(int(ny), 10))
+        xx, yy = np.meshgrid(xg, yg)
+        q = np.column_stack([xx.ravel(), yy.ravel()])
+
+        # Mark points outside mesh/hole regions
+        tri = mtri.Triangulation(self.points[:, 0], self.points[:, 1], self.cells)
+        tri_finder = tri.get_trifinder()
+        inside = tri_finder(q[:, 0], q[:, 1]) >= 0
+
+        # Interpolate from function DOF coordinates by nearest neighbor
+        dof_xy = vector_func.function_space.tabulate_dof_coordinates()[:, :2]
+        dof_uv = vector_func.x.array.reshape(-1, bs)[:, :2]
+        tree = cKDTree(dof_xy)
+        _, nn = tree.query(q[inside], k=1, workers=-1)
+
+        U = np.full(q.shape[0], np.nan, dtype=float)
+        V = np.full(q.shape[0], np.nan, dtype=float)
+        U[inside] = dof_uv[nn, 0]
+        V[inside] = dof_uv[nn, 1]
+
+        U = U.reshape(xx.shape)
+        V = V.reshape(xx.shape)
+        speed = np.sqrt(U**2 + V**2)
+        outside_mask = ~inside.reshape(xx.shape)
+
+        strm = self.ax.streamplot(
+            xg,
+            yg,
+            np.ma.array(U, mask=outside_mask),
+            np.ma.array(V, mask=outside_mask),
+            color=np.ma.array(speed, mask=outside_mask),
+            cmap=cmap,
+            density=density,
+            linewidth=linewidth,
+            arrowsize=arrowsize,
+        )
+        self._last_mappable = strm.lines
+
+    def show(self, title: str | None = None, filename: str | None = None, show_colorbar=True):
+        self.ax.set_aspect("equal", adjustable="box")
+        self.ax.set_xlabel("x")
+        self.ax.set_ylabel("y")
+        if title is not None:
+            self.ax.set_title(title)
+
+        if show_colorbar and self._last_mappable is not None:
+            cbar = self.fig.colorbar(self._last_mappable, ax=self.ax, pad=0.02)
+            cbar.set_label("Magnitude")
+
+        handles, labels = self.ax.get_legend_handles_labels()
+        if labels:
+            self.ax.legend(loc="best")
+
+        self.fig.tight_layout()
+        if filename is not None:
+            self.fig.savefig(filename, dpi=self.fig.dpi)
+            print(f"[MatplotlibVisualizer2D] Saved figure: {filename}")
+        else:
+            plt.show()
