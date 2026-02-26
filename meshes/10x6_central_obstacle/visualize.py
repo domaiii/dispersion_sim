@@ -17,8 +17,3 @@ topology, cell_type, geom = plot.vtk_mesh(domain)
 grid = pv.UnstructuredGrid(topology, cell_type, geom)
 
 grid.plot(screenshot="mesh_vis.png", off_screen=True, show_edges=True, cpos="xy")
-
-elem = element("Lagrange", domain.basix_cell(), 2, shape=(2,))
-
-space = fem.functionspace(domain, elem)
-fun = fem.Function(space)
