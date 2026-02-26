@@ -39,6 +39,9 @@ LEGEND_KW = dict(
 )
 
 def add_legend(ax, title=None):
+    handles, labels = ax.get_legend_handles_labels()
+    if not labels:
+        return
     leg = ax.legend(**LEGEND_KW)
     if title:
         leg.set_title(title)

@@ -1,0 +1,7 @@
+jupyterlab
+pandas
+pygmsh
+scipy
+pyvista
+adios4dolfinx
+imageio>=2.31,<3

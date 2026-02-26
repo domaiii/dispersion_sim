@@ -2,4 +2,6 @@
 *.xdmf
 __pycache__
 *.gif
+*.png
+*.DS_Store
 .vscode/

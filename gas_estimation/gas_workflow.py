@@ -7,7 +7,7 @@ from basix.ufl import element
 from tools.visualizer import Visualizer2D
 from tools.gas_estimator import GasSourceEstimator
 
-wind_file = Path("/home/dominik/git/dispersion_sim/wind_data/airflow_ipcs.bp")
+wind_file = Path("/app/wind_data/airflow_ipcs.bp")
 domain = adios4dolfinx.read_mesh(wind_file, MPI.COMM_WORLD)
 V = fem.functionspace(domain, element("Lagrange", domain.basix_cell(), 2, shape=(2,)))
 wind_field = fem.Function(V)
