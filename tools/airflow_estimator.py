@@ -2,13 +2,12 @@ import ufl
 import warnings
 import adios4dolfinx
 import numpy as np
-import pyvista as pv
 
 from mpi4py import MPI
 from pathlib import Path
 from ufl import grad, div, dot, inner, dx
 from basix.ufl import element, mixed_element
-from dolfinx import fem, plot, mesh
+from dolfinx import fem, mesh
 from dolfinx.fem.petsc import assemble_vector, assemble_matrix
 from petsc4py import PETSc
 
@@ -120,16 +119,7 @@ class AirflowEstimator:
 
         # Optional: read physical names from meshfile
         if meshfile is not None:
-            import gmsh
-            gmsh.initialize()
-            gmsh.open(str(meshfile))
-            phy_groups = gmsh.model.getPhysicalGroups()
-            name_to_id = {
-                gmsh.model.getPhysicalName(dim, tag): tag
-                for (dim, tag) in phy_groups
-            }
-            gmsh.finalize()
-            est._boundary_name_to_id = name_to_id
+            est._boundary_name_to_id = cls._read_physical_name_map(meshfile)
         else:
             est._boundary_name_to_id = {}
 
@@ -161,13 +151,8 @@ class AirflowEstimator:
         else:
             names = list(wall_names)
 
-        # collect facet indices for all given names
-        domain = self.domain
-        ft = self.facet_tags
-        import numpy as np
-
         facets = np.concatenate([
-            ft.find(self._boundary_name_to_id[name]) for name in names
+            self.facet_tags.find(self._boundary_name_to_id[name]) for name in names
         ])
 
         # u = 0 on these facets
@@ -175,7 +160,7 @@ class AirflowEstimator:
         u_D.x.array[:] = 0.0
 
         dofs = fem.locate_dofs_topological((self.W0, self.V),
-                                           domain.topology.dim - 1,
+                                           self.domain.topology.dim - 1,
                                            facets)
         bc = fem.dirichletbc(u_D, dofs, self.W0)
         self.add_dirichlet_bc(bc)
@@ -197,19 +182,15 @@ class AirflowEstimator:
         else:
             names = list(outlet_names)
 
-        domain = self.domain
-        ft = self.facet_tags
-        import numpy as np
-
         facets = np.concatenate([
-            ft.find(self._boundary_name_to_id[name]) for name in names
+            self.facet_tags.find(self._boundary_name_to_id[name]) for name in names
         ])
 
         p_zero = fem.Function(self.Q)
         p_zero.x.array[:] = 0.0
 
         dofs = fem.locate_dofs_topological((self.W1, self.Q),
-                                           domain.topology.dim - 1,
+                                           self.domain.topology.dim - 1,
                                            facets)
         bc = fem.dirichletbc(p_zero, dofs, self.W1)
         self.add_dirichlet_bc(bc)
@@ -306,10 +287,10 @@ class AirflowEstimator:
         else:
             self.ground_truth = funW
             
-    def set_weights(self, kin_v: float | None, 
-                          misfit: float | None, 
-                          pde_err: float | None, 
-                          reg: float | None ):
+    def set_weights(self, kin_v: float | None = None, 
+                          misfit: float | None = None, 
+                          pde_err: float | None = None, 
+                          reg: float | None = None):
         if kin_v:   self.viscosity = kin_v
         if misfit:  self.weight_misfit = misfit
         if pde_err: self.weight_pde_error = pde_err

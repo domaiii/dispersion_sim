@@ -1,6 +1,7 @@
 from dolfinx import fem
 from pathlib import Path
 import scipy
+import adios4dolfinx
 import dolfinx.io as dio
 import pyvista as pv
 import pandas as pd
@@ -96,13 +97,15 @@ if __name__=="__main__":
         height,
         tol,
         fun,
-        debug_plot_file="/app/tools/outside_nodes_debug.png",
-        dist_debug_plot_file="/app/tools/large_distance_nodes_debug.png",
-        dist_threshold=0.2,
+        max_xy_dist=0.2
     )
 
     vis = MatplotlibVisualizer2D(space)
     vis.add_background_mesh()
-    #vis.add_vector_field("wind", fun, stride=1, scale=1.5)
     vis.add_streamplot("stream", fun, 200, 100, 1.5)
     vis.show("matplotlib plot", "matplotlib_wind.png")
+
+    wind_file = Path("/app/exp_sample_based_estimation/exp_wind_comparison/airflow_10x6_ground_truth.bp")
+    adios4dolfinx.write_mesh(wind_file, domain)
+    adios4dolfinx.write_meshtags(wind_file, domain, facet_tags, meshtag_name="facet_tags")
+    adios4dolfinx.write_function(wind_file, fun, name="velocity_H2")
