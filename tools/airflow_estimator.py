@@ -291,10 +291,14 @@ class AirflowEstimator:
                           misfit: float | None = None, 
                           pde_err: float | None = None, 
                           reg: float | None = None):
-        if kin_v:   self.viscosity = kin_v
-        if misfit:  self.weight_misfit = misfit
-        if pde_err: self.weight_pde_error = pde_err
-        if reg:     self.weight_reg = reg
+        if kin_v is not None:
+            self.viscosity = kin_v
+        if misfit is not None:
+            self.weight_misfit = misfit
+        if pde_err is not None:
+            self.weight_pde_error = pde_err
+        if reg is not None:
+            self.weight_reg = reg
         
     def get_measurement_coordinates(self) -> np.ndarray:
         """Rekonstruiere Messpunkt-Koordinaten aus measurement_ids_W."""
@@ -303,6 +307,57 @@ class AirflowEstimator:
         measured_v_ids = [W_to_V[i] for i in self.measurement_ids_W if i in W_to_V]
         measured_v_ids_unique = np.unique(np.array(measured_v_ids) // self.domain.geometry.dim)
         return coords_P2[measured_v_ids_unique]
+
+    def evaluate_objective_terms(self, wh: fem.Function | None = None) -> dict[str, float]:
+        """
+        Evaluate objective contributions for a given mixed field `wh`.
+        Returns unweighted and weighted values of PDE error, regularization, and data misfit.
+        """
+        if wh is None:
+            if self.w_final is None:
+                raise ValueError("No solution available. Call solve() first or provide `wh`.")
+            wh = self.w_final
+
+        domain = self.domain
+        nu = fem.Constant(domain, PETSc.ScalarType(self.viscosity))
+        beta = float(self.weight_pde_error)
+        gamma = float(self.weight_reg)
+        alpha = float(self.weight_misfit)
+
+        uh, ph = ufl.split(wh)
+        # Keep consistency with final fixed-point state: use uh as advecting field.
+        Rmom = -nu * div(grad(uh)) + dot(uh, grad(uh)) + grad(ph)
+        Rdiv = div(uh)
+
+        pde_unweighted_form = fem.form((inner(Rmom, Rmom) + Rdiv * Rdiv) * dx)
+        reg_unweighted_form = fem.form((inner(grad(uh), grad(uh)) + inner(uh, uh)) * dx)
+
+        pde_unweighted_local = fem.assemble_scalar(pde_unweighted_form)
+        reg_unweighted_local = fem.assemble_scalar(reg_unweighted_form)
+
+        pde_unweighted = domain.comm.allreduce(pde_unweighted_local, op=MPI.SUM)
+        reg_unweighted = domain.comm.allreduce(reg_unweighted_local, op=MPI.SUM)
+
+        diff = wh.x.array - self.w_measured.x.array
+        local_ids = self.measurement_ids_W[
+            (self.measurement_ids_W >= 0) & (self.measurement_ids_W < diff.size)
+        ]
+        misfit_unweighted_local = np.sum(diff[local_ids] ** 2)
+        misfit_unweighted = domain.comm.allreduce(misfit_unweighted_local, op=MPI.SUM)
+
+        pde_weighted = beta * pde_unweighted
+        reg_weighted = gamma * reg_unweighted
+        misfit_weighted = alpha * misfit_unweighted
+
+        return {
+            "pde_unweighted": float(pde_unweighted),
+            "reg_unweighted": float(reg_unweighted),
+            "misfit_unweighted": float(misfit_unweighted),
+            "pde_weighted": float(pde_weighted),
+            "reg_weighted": float(reg_weighted),
+            "misfit_weighted": float(misfit_weighted),
+            "objective_total_weighted": float(pde_weighted + reg_weighted + misfit_weighted),
+        }
 
     def _build_linear_system(self, wh_prev: fem.Function):
         """Baut das gesamte lineare System (A, b) inkl. PDE, Regularisierung und Daten-Misfit."""
@@ -327,8 +382,8 @@ class AirflowEstimator:
         Rdiv_v = div(v)
 
         a_pde = (beta * (inner(Rmom_u, Rmom_v) + Rdiv_u * Rdiv_v)) * dx
-        a_reg = (gamma * inner(grad(u), grad(v))) * dx # regularization with ||grad(u)||
-        #a_reg = (gamma * inner(u, v)) * dx # regularization with ||u||
+        #a_reg = (gamma * inner(grad(u), grad(v))) * dx # regularization with ||grad(u)||
+        a_reg = (gamma * inner(u, v)) * dx # regularization with ||u||
 
         zero_vec = fem.Constant(domain, PETSc.ScalarType((0.0,) * domain.geometry.dim))
         L = inner(zero_vec, v) * dx

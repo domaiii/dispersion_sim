@@ -13,8 +13,8 @@ from tools.visualizer import MatplotlibVisualizer2D
 bpfile   = Path("/app/exp_sample_based_estimation/exp_wind_comparison/airflow_10x6_ground_truth.bp")
 meshfile = Path("/app/exp_sample_based_estimation/exp_wind_comparison/mesh.msh")
 
-est = AirflowEstimator.from_file(bpfile, fun_name="velocity_H2", meshtags_name="facet_tags", p=20, seed=15)
-est.set_weights(kin_v=1.5e-4, misfit=1e0, pde_err=1e3, reg=1e-3)
+est = AirflowEstimator.from_file(bpfile, fun_name="velocity_H2", meshtags_name="facet_tags", p=50, seed=1)
+est.set_weights(kin_v=1.5e-4, misfit=1e0, pde_err=1e1, reg=1e-4)
 
 # Boundary conditions
 V = est.V
@@ -30,6 +30,7 @@ name_to_id = {gmsh.model.getPhysicalName(dim, tag): tag for (dim, tag) in phy_gr
 gmsh.finalize()
 
 facet_tags = est.facet_tags
+est._boundary_name_to_id = name_to_id
 
 # No slip boundary condition
 u_D_no_slip = fem.Function(V)
@@ -52,6 +53,10 @@ bc_out = fem.dirichletbc(p_zero, dofs_out, W1)
 est.add_dirichlet_bc([bc_no_slip, bc_out])
 
 result = est.solve(maxit=3)
+terms = est.evaluate_objective_terms(result)
+print("Objective terms:")
+for k, v in terms.items():
+    print(f"  {k:>24s}: {v:.6e}")
 u_est  = result.sub(0).collapse()
 
 vis = MatplotlibVisualizer2D(u_est.function_space)
@@ -64,5 +69,3 @@ vis2.add_background_mesh()
 vis2.add_vector_field("Estimated Airflow", u_est)
 vis2.add_points(est.get_measurement_coordinates())
 vis2.show("Estimated Airflow from LS-FEM", "quiverplot_estimation.png")
-
-
