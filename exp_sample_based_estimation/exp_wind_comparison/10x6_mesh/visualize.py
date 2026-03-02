@@ -9,7 +9,7 @@ import dolfinx.io as dio
 from mpi4py import MPI
 import pyvista as pv
 
-meshfile = Path("/app/meshes/10x6_central_obstacle/mesh.msh").resolve()
+meshfile = Path(__file__).parent / "mesh.msh"
 
 domain, cell_tags, facet_tags = dio.gmshio.read_from_msh(meshfile, MPI.COMM_WORLD, gdim=2)
 
