@@ -1,11 +1,12 @@
-from dolfinx import fem
-from pathlib import Path
 import scipy
 import adios4dolfinx
 import dolfinx.io as dio
 import pyvista as pv
 import pandas as pd
 import numpy as np
+
+from dolfinx import fem
+from pathlib import Path
 from basix.ufl import element
 from mpi4py import MPI
 from dolfinx import plot
