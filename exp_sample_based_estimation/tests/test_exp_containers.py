@@ -9,9 +9,7 @@ from tools.visualizer import Visualizer2D
 from tools.experiment import SingleExperiment, SingleExperimentResult
 
 
-# -------------------------------------------------------------
-# 1. Load mesh + wind ground truth
-# -------------------------------------------------------------
+# Load mesh + wind ground truth
 
 WDIR = Path(__file__).parent.resolve()
 
@@ -37,16 +35,10 @@ air_new.set_weights(
 air_new.set_zero_pressure_bc("Outflow")
 air_new.set_no_slip_bc(["Walls", "Obstacles"])
 
-# -------------------------------------------------------------
-# 2. Gas estimator (empty)
-# -------------------------------------------------------------
-
+# Gas estimator
 gas_new = GasSourceEstimator(air_new.domain)
 
-# -------------------------------------------------------------
-# 3. Run experiment
-# -------------------------------------------------------------
-
+# Run experiment
 exp = SingleExperiment(
     air_est=air_new,
     gas_est=gas_new,
@@ -63,10 +55,7 @@ exp = SingleExperiment(
 result = exp.run_L1()
 result2 = exp.run_L2()
 
-# -------------------------------------------------------------
-# 4. Visualization (L1 result)
-# -------------------------------------------------------------
-
+# Visualization (L1 result)
 vis = Visualizer2D(gas_new.scalar_space)
 vis.add_scalar_field("f_true", result.f_true)
 vis.add_scalar_field("f_est", result.f_est)

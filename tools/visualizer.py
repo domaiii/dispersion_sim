@@ -318,6 +318,42 @@ class MatplotlibVisualizer2D:
         )
         self._last_mappable = quiv
 
+    def add_scalar_field(
+        self,
+        name: str,
+        scalar_func: fem.Function,
+        cmap: str = "coolwarm",
+        shading: str = "gouraud",
+    ):
+        bs = scalar_func.function_space.dofmap.index_map_bs
+        if bs != 1:
+            raise ValueError(f"{name} must be a scalar field (block size 1).")
+
+        values = scalar_func.x.array
+        if values.shape[0] != self.points.shape[0]:
+            # tripcolor with mesh connectivity expects one scalar per mesh vertex.
+            # For higher-order spaces (e.g. P2), interpolate to P1 before plotting.
+            V1 = fem.functionspace(self.mesh, ("Lagrange", 1))
+            scalar_p1 = fem.Function(V1)
+            scalar_p1.interpolate(scalar_func)
+            values = scalar_p1.x.array
+
+        if values.shape[0] != self.points.shape[0]:
+            raise ValueError(
+                f"{name} point/value size mismatch after P1 interpolation: "
+                f"{values.shape[0]} values for {self.points.shape[0]} mesh points."
+            )
+
+        mappable = self.ax.tripcolor(
+            self.points[:, 0],
+            self.points[:, 1],
+            self.cells,
+            values,
+            shading=shading,
+            cmap=cmap,
+        )
+        self._last_mappable = mappable
+
     def add_points(self, coords: np.ndarray, color="red", size=15, label: str | None = None):
         coords = np.asarray(coords)
         if coords.ndim == 1:

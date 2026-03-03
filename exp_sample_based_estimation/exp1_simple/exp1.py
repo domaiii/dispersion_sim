@@ -8,9 +8,10 @@ from tools.gas_estimator import GasSourceEstimator
 from tools.visualizer import Visualizer2D
 from tools.experiment import SingleExperiment, SingleExperimentResult, ErrorValue
 
-# -------------------------------------------------------------
+# Runs a grid experiment for sample-based airflow/gas source estimation on exp1 geometry.
+# Sweeps wind and gas measurement counts across seeds and source locations, stores error metrics.
+
 # 1. Load mesh + wind ground truth + gas estimator
-# -------------------------------------------------------------
 
 WDIR = Path(__file__).parent.resolve()
 
@@ -30,9 +31,7 @@ air_new.set_zero_pressure_bc("Outflow")
 air_new.set_no_slip_bc(["Walls", "Obstacles"])
 gas_new = GasSourceEstimator(air_new.domain, D_phys=0.002)
 
-# -------------------------------------------------------------
 # 2. Averaging parameters
-# -------------------------------------------------------------
 
 wind_seeds = range(1,4)
 gas_seeds  = range(1,4)
@@ -107,9 +106,7 @@ def run_experiment_grid(
 
                 for g_seed in gas_seeds:
 
-                    # --------------------------------------------------
                     # ORACLE WIND RUN (only once per g_seed)
-                    # --------------------------------------------------
                     counter += 1
                     print(f"       [{counter:4d} / {total}] ORACLE run (gas_seed={g_seed})")
 
@@ -151,9 +148,7 @@ def run_experiment_grid(
 
                     gas_est.reset()
 
-                    # --------------------------------------------------
                     # RECONSTRUCTED WIND RUNS
-                    # --------------------------------------------------
                     for w_seed in wind_seeds:
 
                         counter += 1
@@ -225,4 +220,3 @@ run_experiment_grid(
     wind_seeds, gas_seeds,
     sigma, gas_gamma_reg
 )
-

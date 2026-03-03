@@ -11,7 +11,7 @@ from tools.gas_estimator import GasSourceEstimator
 
 WDIR = Path(__file__).parent.resolve()
 
-# 1. Wind-Mesh & Ground-Truth-Wind laden + AirflowEstimator bauen
+# 1. Load wind mesh and ground-truth wind, then build AirflowEstimator
 bpfile = WDIR / "airflow.bp"
 meshfile = WDIR / "mesh/mesh.msh"
 
@@ -25,7 +25,7 @@ air_old = AirflowEstimator.from_file(
 
 air_old.set_weights(kin_v=1.5e-4, misfit=1.0, pde_err=1.0, reg=1e-3)
 
-# 2. Boundary Conditions setzen
+# 2. Set boundary conditions
 gmsh.initialize()
 gmsh.open(str(meshfile))
 phy_groups = gmsh.model.getPhysicalGroups()
@@ -53,16 +53,16 @@ bc_out = fem.dirichletbc(p_zero, dofs_out, air_old.W1)
 air_old.add_dirichlet_bc([bc_no_slip, bc_out])
 
 
-# 3. Windmessungen erzeugen + Wind schätzen
+# 3. Create wind measurements and estimate wind
 air_old.reset_random_measurements(p=100, seed=42)
 u_est = air_old.solve(maxit=5).sub(0).collapse()
 
 
-# 4. GasEstimator erzeugen basierend auf geschätztem Wind
+# 4. Build GasEstimator from estimated wind
 gas_old = GasSourceEstimator(domain, u_est)
 
 
-# 5. Gas-Quelle (Ground Truth) definieren
+# 5. Define gas source (ground truth)
 x0, y0 = 0.7 * gas_old.Lx, 0.8 * gas_old.Ly
 sigma_x = 0.01 * gas_old.Lx
 
@@ -81,14 +81,14 @@ gas_old.set_ground_truth(f_true)
 gas_old.reset_random_measurements(p=60, seed=15)
 
 
-# 7. Gasquelle schätzen (L1 oder L2)
+# 7. Estimate gas source (L1 or L2)
 f_est = gas_old.solve_L1(gamma_reg=5e-2)
 
 
-# Visualizer erzeugen
+# Create visualizer
 vis = Visualizer2D(gas_old.scalar_space)
 
-# Hintergrund-Mesh (optional)
+# Background mesh (optional)
 # vis.add_background_mesh(opacity=0.1)
 
 # Ground truth source
@@ -97,7 +97,7 @@ vis.add_scalar_field("f_true", gas_old.f_true)
 # Estimated source
 vis.add_scalar_field("f_est", f_est)
 
-# Maxima visualisieren
+# Visualize maxima
 coords = gas_old.scalar_space.tabulate_dof_coordinates()
 idx_true = np.argmax(gas_old.f_true.x.array)
 loc_true = coords[idx_true]
@@ -105,14 +105,14 @@ loc_true = coords[idx_true]
 idx_est = np.argmax(f_est.x.array)
 loc_est = coords[idx_est]
 
-# Punkte setzen
+# Set points
 vis.add_points([loc_true], color="blue", size=15, label="True Source Max")
 vis.add_points([loc_est], color="red", size=15, label="Estimated Source Max")
 
-# Zeigen
+# Show
 vis.show(title="Gas Source: True vs Estimated", zoom=1.2)
 
-# --- Plot B: Messpunkte + geschätzte Quelle ---
+# --- Plot B: measurement points + estimated source ---
 vis2 = Visualizer2D(gas_old.scalar_space, font_size=26)
 
 # Estimated source field
@@ -129,7 +129,7 @@ vis2.add_points(meas_coords,
 vis2.show("Measurement Positions")
 
 
-# --- Plot C: Estimated Airflow ---
+# --- Plot C: estimated airflow ---
 vis3 = Visualizer2D(air_old.V, font_size=26)
 
 # Estimated source field

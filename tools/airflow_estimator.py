@@ -22,8 +22,8 @@ class AirflowEstimator:
                  weight_pde_error: float = 1.0,
                  weight_reg: float = 1e-2):
         """
-        Initialisiert den Estimator OHNE Boundary Conditions.
-        Alle Funktionsräume werden aufgebaut, damit man sie direkt für BCs nutzen kann.
+        Initialize estimator without boundary conditions.
+        Build all function spaces so BCs can be applied directly.
         """
         self.domain: mesh.Mesh = domain
         self.measurement_ids_W = np.asarray(measurement_ids_W, dtype=np.int32)
@@ -218,7 +218,7 @@ class AirflowEstimator:
 
     @staticmethod
     def build_mixed_space(domain, deg_u=2, deg_p=1):
-        """Erzeugt das gemischte (velocity-pressure) Funktionsraumtuple."""
+        """Build the mixed (velocity-pressure) function space tuple."""
         elem_u = element("Lagrange", domain.basix_cell(), deg_u, shape=(domain.geometry.dim,))
         elem_p = element("Lagrange", domain.basix_cell(), deg_p)
         mixed_elem = mixed_element([elem_u, elem_p])
@@ -274,7 +274,7 @@ class AirflowEstimator:
         """
         Creates new random measurement set overwriting self.measurement_ids_W and selfw_measured.
         Resets the solution self.w_final.
-        Benötigt, dass eine ground_truth-Funktion gesetzt wurde.
+        Requires a ground truth function to be set.
         """
         if self.ground_truth is None:
             raise ValueError("No ground truth set. Use set_ground_truth() first.")
@@ -316,7 +316,7 @@ class AirflowEstimator:
         if reg:     self.weight_reg = reg
         
     def get_measurement_coordinates(self) -> np.ndarray:
-        """Rekonstruiere Messpunkt-Koordinaten aus measurement_ids_W."""
+        """Reconstruct measurement point coordinates from measurement_ids_W."""
         coords_P2 = self.V.tabulate_dof_coordinates()
         W_to_V = {w: v for v, w in enumerate(self.V_to_W)}
         measured_v_ids = [W_to_V[i] for i in self.measurement_ids_W if i in W_to_V]
@@ -324,22 +324,22 @@ class AirflowEstimator:
         return coords_P2[measured_v_ids_unique]
 
     def _build_linear_system(self, wh_prev: fem.Function):
-        """Baut das gesamte lineare System (A, b) inkl. PDE, Regularisierung und Daten-Misfit."""
+        """Build the full linear system (A, b) incl. PDE, regularization, and data misfit."""
 
         W = wh_prev.function_space
         domain = W.mesh
 
-        # Konstanten
+        # Constants
         nu    = fem.Constant(domain, PETSc.ScalarType(self.viscosity))
         beta  = fem.Constant(domain, PETSc.ScalarType(self.weight_pde_error))
         gamma = fem.Constant(domain, PETSc.ScalarType(self.weight_reg))
 
-        # Test-/Trial-Funktionen
+        # Test/trial functions
         uh_prev, _ = wh_prev.split()
         (u, p) = ufl.TrialFunctions(W)
         (v, q) = ufl.TestFunctions(W)
 
-        # PDE Residuen (Least-Squares)
+        # PDE residuals (least squares)
         Rmom_u = -nu * div(grad(u)) + dot(uh_prev, grad(u)) + grad(p)
         Rmom_v = -nu * div(grad(v)) + dot(uh_prev, grad(v)) + grad(q)
         Rdiv_u = div(u)
@@ -352,7 +352,7 @@ class AirflowEstimator:
         zero_vec = fem.Constant(domain, PETSc.ScalarType((0.0,) * domain.geometry.dim))
         L = inner(zero_vec, v) * dx
 
-        # --- Assemble mit BCs
+        # --- Assemble with BCs
         aF, LF = fem.form(a_pde + a_reg), fem.form(L)
         A = assemble_matrix(aF, bcs=self.bcs); A.assemble()
         b = assemble_vector(LF)
@@ -360,7 +360,7 @@ class AirflowEstimator:
         b.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
         fem.set_bc(b, self.bcs)
 
-        # --- DOF-Penalty (Messdaten)
+        # --- DOF penalty (measurements)
         S = PETSc.Mat().createAIJ(A.getSizes(), nnz=1, comm=A.comm); S.setUp()
         for i in map(int, self.measurement_ids_W):
             S.setValue(i, i, 1.0)
