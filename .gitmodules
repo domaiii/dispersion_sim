@@ -1,0 +1,4 @@
+[submodule "GMRF-wind"]
+	path = GMRF-wind
+	url = https://github.com/MAPIRlab/GMRF-wind.git
+	branch = ros2_cleaning_code
