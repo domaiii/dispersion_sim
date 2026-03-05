@@ -1,6 +1,6 @@
 {
   "name": "DOLFINx",
-  "dockerComposeFile": "../compose.yml",
+  "dockerComposeFile": "../../compose.yml",
   "service": "simulation",
   "workspaceFolder": "/app",
   "customizations": {

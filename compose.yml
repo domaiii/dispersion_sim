@@ -1,5 +1,6 @@
 services:
   simulation:
+    container_name: dolfinx-sim
     build: .
     image: mydolfinx:v0.9 
     volumes:
@@ -10,3 +11,16 @@ services:
     tty: true            
     stdin_open: true    
     command: jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root
+
+  ros2:
+    container_name: ros2-gmrf
+    build:
+      context: .
+      dockerfile: ros2/Dockerfile
+    image: my-ros2-gmrf:humble
+    volumes:
+      - .:/app
+    working_dir: /app
+    tty: true
+    stdin_open: true
+    command: bash -lc "sleep infinity"

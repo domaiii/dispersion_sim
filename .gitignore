@@ -5,3 +5,7 @@ __pycache__
 *.png
 *.DS_Store
 .vscode/
+
+build/
+install/
+log/

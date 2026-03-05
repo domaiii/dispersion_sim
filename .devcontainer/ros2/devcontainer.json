@@ -1,0 +1,6 @@
+{
+  "name": "ROS2",
+  "dockerComposeFile": "../../compose.yml",
+  "service": "ros2",
+  "workspaceFolder": "/app"
+}
