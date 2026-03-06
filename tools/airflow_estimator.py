@@ -2,9 +2,11 @@ import ufl
 import warnings
 import adios4dolfinx
 import numpy as np
+import pandas as pd
 
 from mpi4py import MPI
 from pathlib import Path
+from scipy.spatial import cKDTree
 from ufl import grad, div, dot, inner, dx
 from basix.ufl import element, mixed_element
 from dolfinx import fem, mesh
@@ -251,6 +253,126 @@ class AirflowEstimator:
         else:
             self.bcs.append(bc)
 
+    def set_measurements(
+        self,
+        measurement_ids_W: np.ndarray,
+        measurement_values: np.ndarray,
+        clear_existing: bool = True,
+    ):
+        """
+        Set explicit wind measurements in mixed space W.
+
+        Parameters
+        ----------
+        measurement_ids_W : np.ndarray
+            Flattened W-indices for velocity components.
+        measurement_values : np.ndarray
+            Flattened measurement values aligned with measurement_ids_W.
+        clear_existing : bool
+            If True, clear all previous measurements first.
+        """
+        ids = np.asarray(measurement_ids_W, dtype=np.int32).reshape(-1)
+        values = np.asarray(measurement_values, dtype=float).reshape(-1)
+
+        if ids.size == 0:
+            raise ValueError("measurement_ids_W is empty.")
+        if ids.size != values.size:
+            raise ValueError(
+                f"Length mismatch: len(ids)={ids.size} != len(values)={values.size}"
+            )
+        if np.any(ids < 0) or np.any(ids >= self.w_measured.x.array.size):
+            raise ValueError("measurement_ids_W contains out-of-bounds indices.")
+
+        if clear_existing:
+            self.w_measured.x.array[:] = 0.0
+
+        self.w_measured.x.array[ids] = values
+        self.measurement_ids_W = ids
+        self.w_final = None
+
+    def set_measurements_from_csv(
+        self,
+        samples_csv: str | Path,
+        unique_nodes: bool = True,
+        max_xy_dist: float | None = None,
+        clear_existing: bool = True,
+    ) -> dict[str, float]:
+        """
+        Load wind samples from CSV and map them to nearest velocity nodes.
+
+        Expected CSV columns: x, y, wind_x, wind_y.
+
+        Parameters
+        ----------
+        samples_csv : str | Path
+            Path to sample CSV.
+        unique_nodes : bool
+            If True, keep only first sample per matched FEM node.
+        max_xy_dist : float | None
+            Optional maximum allowed nearest-neighbor mapping distance in XY.
+        clear_existing : bool
+            If True, remove all previous measurements before writing new ones.
+
+        Returns
+        -------
+        dict[str, float]
+            Mapping stats (input/used samples, dropped duplicates, max distance).
+        """
+        samples_csv = Path(samples_csv).resolve(strict=True)
+
+        df = pd.read_csv(samples_csv)
+        required = ["x", "y", "wind_x", "wind_y"]
+        missing = [c for c in required if c not in df.columns]
+        if missing:
+            raise ValueError(
+                f"Missing required columns in {samples_csv.name}: {missing}. "
+                f"Expected at least {required}."
+            )
+        if len(df) == 0:
+            raise ValueError(f"No sample rows found in {samples_csv}")
+
+        samples_xy = df[["x", "y"]].to_numpy(dtype=float)
+        samples_uv = df[["wind_x", "wind_y"]].to_numpy(dtype=float)
+
+        node_xy = np.asarray(self.V.tabulate_dof_coordinates(), dtype=float)[:, :2]
+        tree = cKDTree(node_xy)
+        dist, node_ids = tree.query(samples_xy, k=1, p=2.0, workers=-1)
+
+        max_dist = float(np.max(dist))
+        if max_xy_dist is not None and max_dist > max_xy_dist:
+            raise ValueError(
+                f"Maximum XY mapping distance exceeded: {max_dist:.6g} > {max_xy_dist:.6g}"
+            )
+
+        n_input = int(len(node_ids))
+        n_dropped = 0
+        if unique_nodes:
+            _, first_idx = np.unique(node_ids, return_index=True)
+            keep = np.sort(first_idx)
+            n_dropped = n_input - int(len(keep))
+            node_ids = node_ids[keep]
+            samples_uv = samples_uv[keep]
+            dist = dist[keep]
+
+        x_ids = node_ids * 2
+        y_ids = node_ids * 2 + 1
+        velocity_ids_V = np.stack((x_ids, y_ids)).T.flatten().astype(np.int32)
+        measurement_ids_W = self.V_to_W[velocity_ids_V]
+        measurement_values = np.stack((samples_uv[:, 0], samples_uv[:, 1]), axis=1).flatten()
+
+        self.set_measurements(
+            measurement_ids_W=measurement_ids_W,
+            measurement_values=measurement_values,
+            clear_existing=clear_existing,
+        )
+
+        return {
+            "n_input_samples": float(n_input),
+            "n_used_samples": float(len(node_ids)),
+            "n_dropped_duplicate_nodes": float(n_dropped),
+            "max_xy_dist": float(np.max(dist)) if len(dist) else 0.0,
+        }
+
     def reset_random_measurements(self, p: int, seed: int | None = None):
         """
         Creates new random measurement set overwriting self.measurement_ids_W and selfw_measured.
@@ -273,13 +395,12 @@ class AirflowEstimator:
 
         # Mapping in W
         measurement_ids_W = self.V_to_W[velocity_ids_V]
-
-        self.w_measured.x.array[:] = 0.0
-        self.w_measured.x.array[measurement_ids_W] = \
-            self.ground_truth.x.array[measurement_ids_W]
-
-        self.measurement_ids_W = measurement_ids_W.astype(np.int32)
-        self.w_final = None
+        measurement_values = self.ground_truth.x.array[measurement_ids_W]
+        self.set_measurements(
+            measurement_ids_W=measurement_ids_W,
+            measurement_values=measurement_values,
+            clear_existing=True,
+        )
 
     def set_ground_truth(self, funW: fem.Function):
         if self.ground_truth:
