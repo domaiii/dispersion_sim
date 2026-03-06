@@ -274,7 +274,7 @@ if __name__ == "__main__":
 
     height = 1.0  # m
     tol = 0.1  # m
-    csv_file = "/app/meshes/10x6_central_obstacle/wind_solution.csv"
+    csv_file = "/app/csv_wind_data/10x6_central_obstacle/wind_solution.csv"
 
     load_from_3Dcsv(
         csv_file,
