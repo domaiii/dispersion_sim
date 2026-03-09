@@ -265,31 +265,10 @@ def load_from_3Dcsv(
 
 if __name__ == "__main__":
 
-    meshfile = Path("/app/meshes/10x6_central_obstacle/mesh.msh").resolve()
-    domain, cell_tags, facet_tags = dio.gmshio.read_from_msh(meshfile, MPI.COMM_WORLD, gdim=2)
-    elem = element("Lagrange", domain.basix_cell(), 2, shape=(2,))
-    space = fem.functionspace(domain, elem)
-
-    fun = fem.Function(space)
-
-    height = 1.0  # m
-    tol = 0.1  # m
-    csv_file = "/app/csv_wind_data/10x6_central_obstacle/wind_solution.csv"
-
-    load_from_3Dcsv(
-        csv_file,
-        height,
-        tol,
-        fun,
-        max_xy_dist=0.2
-    )
-
-    vis = MatplotlibVisualizer2D(space)
-    vis.add_background_mesh()
-    vis.add_streamplot("stream", fun, 200, 100, 1.5)
-    vis.show("matplotlib plot", "matplotlib_wind.png")
-
-    wind_file = Path("/app/exp_sample_based_estimation/exp_wind_comparison/airflow_10x6_ground_truth.bp")
-    adios4dolfinx.write_mesh(wind_file, domain)
-    adios4dolfinx.write_meshtags(wind_file, domain, facet_tags, meshtag_name="facet_tags")
-    adios4dolfinx.write_function(wind_file, fun, name="velocity_H2")
+    csv_wind = "/app/csv_wind_data/10x6_central_obstacle/wind_solution.csv"
+    save_dir = "/app/csv_wind_data/10x6_central_obstacle/csv_wind_sample_sets"
+    seeds = np.arange(3)
+    sample_point_sizes = [25, 50, 100, 200, 400]
+    for seed in seeds:
+        for n_points in sample_point_sizes:
+            create_sample_points_with_wind_csv(csv_wind, n_points, seed, 1.0, 0.15, save_dir)
