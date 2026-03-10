@@ -11,6 +11,7 @@ COPY ros2 /app/ros2
 RUN rosdep update && \
     apt-get update && \
     rosdep install --from-paths src --ignore-src -y && \
+    apt-get install -y python3-matplotlib && \
     rm -rf /var/lib/apt/lists/*
 
 RUN echo 'source /opt/ros/humble/setup.bash' >> /etc/bash.bashrc

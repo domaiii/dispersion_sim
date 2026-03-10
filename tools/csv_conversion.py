@@ -267,7 +267,7 @@ if __name__ == "__main__":
 
     csv_wind = "/app/csv_wind_data/10x6_central_obstacle/wind_solution.csv"
     save_dir = "/app/csv_wind_data/10x6_central_obstacle/csv_wind_sample_sets"
-    seeds = np.arange(3)
+    seeds = np.arange(10)
     sample_point_sizes = [25, 50, 100, 200, 400]
     for seed in seeds:
         for n_points in sample_point_sizes:
