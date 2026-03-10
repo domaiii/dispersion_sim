@@ -143,7 +143,8 @@ def save_estimation_png(
     output_path: Path,
     res: WindEstimation.Response,
     used_samples: int,
-    plot_step: int = 1,
+    streamplot: bool = False,
+    plot_step: int = 1
 ) -> None:
     n = len(res.u)
     if res.map_width <= 0 or n == 0 or n % res.map_width != 0:
@@ -158,21 +159,35 @@ def save_estimation_png(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(10, 5), dpi=160)
 
-    quiv = ax.quiver(
-        xx[::plot_step, ::plot_step],
-        yy[::plot_step, ::plot_step],
-        u_arr[::plot_step, ::plot_step],
-        v_arr[::plot_step, ::plot_step],
-        speed[::plot_step, ::plot_step],
-        cmap="coolwarm",
-        angles="xy",
-        scale_units="xy",
-        scale=None,
-        width=0.0022,
-        pivot="mid",
-    )
+    if streamplot:
+        stream = ax.streamplot(
+            np.arange(res.map_width),
+            np.arange(map_height),
+            u_arr,
+            v_arr,
+            color=speed,
+            cmap="coolwarm",
+            density=1.1,
+            linewidth=1.0,
+            arrowsize=0.9,
+        )
+        mappable = stream.lines
+    else:
+        mappable = ax.quiver(
+            xx[::plot_step, ::plot_step],
+            yy[::plot_step, ::plot_step],
+            u_arr[::plot_step, ::plot_step],
+            v_arr[::plot_step, ::plot_step],
+            speed[::plot_step, ::plot_step],
+            cmap="coolwarm",
+            angles="xy",
+            scale_units="xy",
+            scale=None,
+            width=0.0022,
+            pivot="mid",
+        )
 
-    cbar = fig.colorbar(quiv, ax=ax, pad=0.02)
+    cbar = fig.colorbar(mappable, ax=ax, pad=0.02)
     cbar.set_label("Magnitude")
     ax.set_aspect("equal", adjustable="box")
     ax.set_xlabel("x")
