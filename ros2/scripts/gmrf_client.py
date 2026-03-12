@@ -15,6 +15,7 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 import rclpy
+import yaml
 from rclpy.node import Node
 
 from gmrf_msgs.srv import AddWindObservation, ClearObservations, WindEstimation
@@ -122,22 +123,65 @@ def batched(data: list[Observation], size: int):
         yield data[i : i + size]
 
 
+def load_free_space_mask(map_yaml_file: Path) -> tuple[np.ndarray, float, float, float]:
+    with Path(map_yaml_file).open("r") as f:
+        data = yaml.safe_load(f)
+
+    image_name = data.get("image")
+    origin = data.get("origin")
+    resolution = data.get("resolution")
+    free_thresh = float(data.get("free_thresh", 0.1))
+    negate = int(data.get("negate", 0))
+    if image_name is None or not isinstance(origin, list) or len(origin) < 2 or resolution is None:
+        raise ValueError(f"Invalid map yaml: {map_yaml_file}")
+
+    image_path = Path(map_yaml_file).parent / image_name
+    with image_path.open("r") as f:
+        tokens = [token for line in f for token in line.split() if not line.startswith("#")]
+    if len(tokens) < 4 or tokens[0] != "P2":
+        raise ValueError(f"Unsupported occupancy image format: {image_path}")
+    width = int(tokens[1])
+    height = int(tokens[2])
+    max_value = float(tokens[3])
+    image = np.asarray(tokens[4:], dtype=float).reshape(height, width)
+    if max_value > 0:
+        image = image * (255.0 / max_value)
+
+    occupancy = image / 255.0 if negate else (255.0 - image) / 255.0
+    free_mask = occupancy < free_thresh
+    return free_mask, float(resolution), float(origin[0]), float(origin[1])
+
+
 def save_estimation_csv(
     output_path: Path,
-    res: WindEstimation.Response
+    res: WindEstimation.Response,
+    cell_size: float,
+    map_yaml_file: Path | str,
 ) -> None:
     n = len(res.u)
     if res.map_width <= 0 or n == 0 or len(res.v) != n or n % res.map_width != 0:
         raise ValueError("Invalid map size in WindEstimation response")
+    map_yaml_file = Path(map_yaml_file)
+    free_mask, map_resolution, origin_x, origin_y = load_free_space_mask(map_yaml_file)
+    height, width = free_mask.shape
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["sample_id", "x", "y", "z", "wind_x", "wind_y", "wind_z"])
         for idx in range(n):
-            x = idx % res.map_width
-            y = idx // res.map_width
-            writer.writerow([idx, x, y, 0.0, res.u[idx], res.v[idx], 0.0])
+            grid_x = idx % res.map_width
+            grid_y = idx // res.map_width
+            x = origin_x + (grid_x + 0.5) * cell_size
+            y = origin_y + (grid_y + 0.5) * cell_size
+            x_idx = int((x - origin_x) / map_resolution)
+            y_idx = int((y - origin_y) / map_resolution)
+            if x_idx < 0 or x_idx >= width or y_idx < 0 or y_idx >= height:
+                continue
+            if not free_mask[height - 1 - y_idx, x_idx]:
+                continue
+            z = 1.0
+            writer.writerow([idx, x, y, z, res.u[idx], res.v[idx], 0.0])
 
 def save_estimation_png(
     output_path: Path,

@@ -11,14 +11,30 @@ import sys
 from pathlib import Path
 
 import rclpy
+import yaml
 
 import gmrf_client
 
 CSV_DIR = Path("/app/csv_wind_data/10x6_central_obstacle/csv_wind_sample_sets")
-OUTPUT_DIR = Path("/app/ros2/results/cellsize0.1/")
+OUTPUT_DIR = Path("/app/ros2/results")
+PARAMS_FILE = Path("/app/ros2/src/GMRF-wind/gmrf_wind_mapping/launch/gmrf_comparison.params.yaml")
 BATCH_SIZE = 25
-VAR_SPEED = 1e-6
-VAR_DIRECTION = 1e-6
+VAR_SPEED = 1e-2
+VAR_DIRECTION = 1e-2
+
+
+def load_gmrf_params(params_file: Path) -> tuple[Path, float]:
+    with params_file.open("r") as f:
+        data = yaml.safe_load(f)
+
+    for node_config in data.values():
+        ros_params = node_config.get("ros__parameters", {})
+        map_yaml_file = ros_params.get("map_yaml_file")
+        cell_size = ros_params.get("cell_size")
+        if map_yaml_file is not None and cell_size is not None:
+            return Path(map_yaml_file), float(cell_size)
+
+    raise KeyError(f"map_yaml_file/cell_size not found in {params_file}")
 
 
 def main() -> int:
@@ -28,6 +44,7 @@ def main() -> int:
         csv_files = sorted(p for p in CSV_DIR.glob("*.csv") if p.is_file())
         if not csv_files:
             raise FileNotFoundError(f"No CSV files found in {CSV_DIR}")
+        map_yaml_file, cell_size = load_gmrf_params(PARAMS_FILE)
     except Exception as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
         return 2
@@ -72,11 +89,11 @@ def main() -> int:
                 node.get_logger().error(f"WindEstimation query failed for {csv_path}")
                 return 1
             
-            out_csv = OUTPUT_DIR / f"{csv_path.stem}_gmrf_{len(res.u)}nodes.csv"
-            out_png = OUTPUT_DIR / f"{csv_path.stem}_gmrf_{len(res.u)}nodes.png"
+            out_csv = OUTPUT_DIR / f"cell{cell_size}" / f"{csv_path.stem}_gmrf_{len(res.u)}nodes.csv"
+            out_png = out_csv.with_suffix(".png")
 
-            gmrf_client.save_estimation_csv(out_csv, res)
-            gmrf_client.save_estimation_png(out_png, res, sent)
+            gmrf_client.save_estimation_csv(out_csv, res, cell_size, map_yaml_file)
+            gmrf_client.save_estimation_png(out_png, res, sent, streamplot=False)
 
         node.get_logger().info(f"Done. Processed {total_files} CSV files.")
         return 0
