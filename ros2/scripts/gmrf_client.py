@@ -187,6 +187,9 @@ def save_estimation_png(
     output_path: Path,
     res: WindEstimation.Response,
     used_samples: int,
+    observations: list[Observation] | None = None,
+    cell_size: float | None = None,
+    map_yaml_file: Path | str | None = None,
     streamplot: bool = False,
     plot_step: int = 1
 ) -> None:
@@ -233,6 +236,27 @@ def save_estimation_png(
 
     cbar = fig.colorbar(mappable, ax=ax, pad=0.02)
     cbar.set_label("Magnitude")
+
+    if observations:
+        if cell_size is None or map_yaml_file is None:
+            raise ValueError("cell_size and map_yaml_file are required when plotting observations.")
+        _, _, origin_x, origin_y = load_free_space_mask(Path(map_yaml_file))
+        obs_x = [((obs.x - origin_x) / cell_size) - 0.5 for obs in observations]
+        obs_y = [((obs.y - origin_y) / cell_size) - 0.5 for obs in observations]
+        ax.scatter(
+            obs_x,
+            obs_y,
+            s=14,
+            c="black",
+            alpha=0.9,
+            marker="o",
+            linewidths=0.3,
+            edgecolors="white",
+            label="Measurements",
+            zorder=3,
+        )
+        ax.legend(loc="upper right")
+
     ax.set_aspect("equal", adjustable="box")
     ax.set_xlabel("x")
     ax.set_ylabel("y")

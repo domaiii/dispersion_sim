@@ -7,6 +7,7 @@ created in-memory by taking the first N observations from that file, so all esti
 share identical nested subsets.
 """
 import sys
+import re
 from pathlib import Path
 
 import rclpy
@@ -40,6 +41,13 @@ def discover_base_csv_files() -> list[Path]:
     return base_files
 
 
+def extract_seed(csv_path: Path) -> int:
+    match = re.search(r"_seed(\d+)", csv_path.stem)
+    if match is None:
+        raise ValueError(f"Could not extract seed from CSV filename: {csv_path.name}")
+    return int(match.group(1))
+
+
 def main() -> int:
     base_csv_files = discover_base_csv_files()
     map_yaml_file, cell_size = load_gmrf_params()
@@ -53,9 +61,10 @@ def main() -> int:
 
         total_runs = len(base_csv_files) * len(SUBSET_SIZES)
         run_idx = 0
-        for file_idx, csv_path in enumerate(base_csv_files):
+        for csv_path in base_csv_files:
             try:
                 all_observations = gmrf_client.load_observations(csv_path, VAR_SPEED, VAR_DIRECTION)
+                seed = extract_seed(csv_path)
             except Exception as exc:
                 node.get_logger().error(f"Failed to load base CSV {csv_path}: {exc}")
                 return 1
@@ -70,7 +79,7 @@ def main() -> int:
             for subset_size in SUBSET_SIZES:
                 run_idx += 1
                 observations = all_observations[:subset_size]
-                run_name = f"{csv_path.stem}_prefix{subset_size}_file{file_idx}"
+                run_name = f"gmrf_result_n{subset_size}_seed{seed}"
                 node.get_logger().info(f"[{run_idx}/{total_runs}] Processing {run_name} from {csv_path.name}")
 
                 if not node.clear_observations(timeout_sec=gmrf_client.CALL_TIMEOUT_SEC):
@@ -92,11 +101,19 @@ def main() -> int:
                     node.get_logger().error(f"WindEstimation query failed for {run_name}")
                     return 1
 
-                out_csv = OUTPUT_DIR / f"cell{cell_size}" / f"{run_name}_gmrf_{len(res.u)}nodes.csv"
+                out_csv = OUTPUT_DIR / f"cell{cell_size}" / f"{run_name}_{len(res.u)}nodes.csv"
                 out_png = out_csv.with_suffix(".png")
 
                 gmrf_client.save_estimation_csv(out_csv, res, cell_size, map_yaml_file)
-                gmrf_client.save_estimation_png(out_png, res, sent, streamplot=False)
+                gmrf_client.save_estimation_png(
+                    out_png,
+                    res,
+                    sent,
+                    observations=observations,
+                    cell_size=cell_size,
+                    map_yaml_file=map_yaml_file,
+                    streamplot=False,
+                )
 
         node.get_logger().info(f"Done. Processed {total_runs} GMRF runs from {len(base_csv_files)} base sample files.")
         return 0

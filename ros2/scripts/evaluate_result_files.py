@@ -7,13 +7,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-RESULTS_DIR = Path("/app/ros2/results/cell0.1")
+RESULTS_DIR = Path("/app/ros2/results/cell0.25")
 GROUND_TRUTH_CSV = Path("/app/csv_wind_data/10x6_central_obstacle/wind_solution.csv")
 GROUND_TRUTH_Z = 1.05
 GROUND_TRUTH_Z_TOL = 0.02
 COORD_COLUMNS = ["x", "y"]
 WIND_COLUMNS = ["wind_x", "wind_y"]
 MATCH_DISTANCE_THRESHOLD = 0.03
+GROUND_TRUTH_PLOT_PATH = RESULTS_DIR / "ground_truth_on_gmrf_grid.png"
 
 
 def load_ground_truth_layer() -> pd.DataFrame:
@@ -63,6 +64,38 @@ def evaluate_file(result_path: Path, gt_wind_by_result_idx: np.ndarray, keep_mas
     diff = result_wind[keep_mask] - gt_wind_by_result_idx[keep_mask]
     return float(np.sqrt(np.mean(np.einsum("ij,ij->i", diff, diff))))
 
+
+def save_ground_truth_grid_png(result_path: Path, gt_wind_by_result_idx: np.ndarray, output_path: Path) -> None:
+    result_xy = pd.read_csv(result_path, usecols=COORD_COLUMNS).to_numpy(dtype=np.float64)
+    x_coords = np.unique(result_xy[:, 0])
+    y_coords = np.unique(result_xy[:, 1])
+    x_coords.sort()
+    y_coords.sort()
+
+    xx, yy = np.meshgrid(x_coords, y_coords)
+    u_grid = np.full(xx.shape, np.nan, dtype=np.float64)
+    v_grid = np.full(xx.shape, np.nan, dtype=np.float64)
+    x_idx = np.searchsorted(x_coords, result_xy[:, 0])
+    y_idx = np.searchsorted(y_coords, result_xy[:, 1])
+    u_grid[y_idx, x_idx] = gt_wind_by_result_idx[:, 0]
+    v_grid[y_idx, x_idx] = gt_wind_by_result_idx[:, 1]
+    valid = np.isfinite(u_grid) & np.isfinite(v_grid)
+    speed = np.hypot(u_grid, v_grid)
+
+    fig, ax = plt.subplots(figsize=(10, 5), dpi=160)
+    quiver = ax.quiver(
+        xx[valid], yy[valid], u_grid[valid], v_grid[valid], speed[valid],
+        cmap="coolwarm", angles="xy", scale_units="xy", scale=None, width=0.0022, pivot="mid",
+    )
+    fig.colorbar(quiver, ax=ax, pad=0.02, label="Magnitude")
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_title("Ground Truth on GMRF Grid")
+    fig.tight_layout()
+    fig.savefig(output_path)
+    plt.close(fig)
+
 filenames = listdir(RESULTS_DIR)
 csv_files = [filename for filename in filenames if filename.endswith(".csv")]
 sample_sizes = sorted(
@@ -79,6 +112,7 @@ ground_truth_wind, min_distances = build_ground_truth_lookup(
     first_result_path, ground_truth, MATCH_DISTANCE_THRESHOLD
 )
 keep_mask = min_distances < MATCH_DISTANCE_THRESHOLD
+save_ground_truth_grid_png(first_result_path, ground_truth_wind, GROUND_TRUTH_PLOT_PATH)
 
 print(
     "Lookup diagnostics: "
@@ -124,3 +158,4 @@ fig.tight_layout()
 plot_path = RESULTS_DIR / "evaluation_rmse.png"
 fig.savefig(plot_path, dpi=160)
 print(f"\nSaved plot to {plot_path}")
+print(f"Saved plot to {GROUND_TRUTH_PLOT_PATH}")
