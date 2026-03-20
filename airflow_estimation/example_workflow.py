@@ -51,7 +51,7 @@ bc_out = fem.dirichletbc(p_zero, dofs_out, W1)
 
 est.add_dirichlet_bc([bc_no_slip, bc_out])
 
-result = est.solve(maxit=3)
+result = est.solve_minimum_residual(maxit=3)
 
 m_coords = est.get_measurement_coordinates()
 
@@ -108,4 +108,3 @@ vis_Scalar2 = Visualizer2D(V_scalar, window_size=(3200,1800), font_size=50)
 vis_Scalar2.add_background_mesh()
 vis_Scalar2.add_scalar_field("Velocity error in m/s", vel_field)
 vis_Scalar2.show(zoom=1.4)
-

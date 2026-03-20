@@ -1,9 +1,5 @@
 import gmsh
-import ufl
 import numpy as np
-import matplotlib.pyplot as plt
-
-from mpi4py import MPI
 from dolfinx import fem
 from pathlib import Path
 from tools.airflow_estimator import AirflowEstimator
@@ -11,10 +7,10 @@ from tools.visualizer import MatplotlibVisualizer2D
 
 # Example usage 
 bpfile   = Path("/app/exp_sample_based_estimation/exp_wind_comparison/airflow_10x6_ground_truth.bp")
-meshfile = Path("/app/exp_sample_based_estimation/exp_wind_comparison/mesh.msh")
+meshfile = Path("/app/exp_sample_based_estimation/exp_wind_comparison/10x6_mesh/mesh.msh")
 
-est = AirflowEstimator.from_file(bpfile, fun_name="velocity_H2", meshtags_name="facet_tags", p=50, seed=1)
-est.set_weights(kin_v=1.5e-4, misfit=1e0, pde_err=1e1, reg=1e-4)
+est = AirflowEstimator.from_file(bpfile, fun_name="velocity_H2", meshtags_name="facet_tags", p=25, seed=5)
+est.set_weights(kin_v=1.5e-2, misfit=1e1, pde_err=1e0, reg=1e-5, boundary=1e2)
 
 # Boundary conditions
 V = est.V
@@ -52,7 +48,8 @@ bc_out = fem.dirichletbc(p_zero, dofs_out, W1)
 
 est.add_dirichlet_bc([bc_no_slip, bc_out])
 
-result = est.solve(maxit=3)
+result = est.solve_linear_least_squares(100, 0.001, regularization="smooth")
+#result = est.solve_weak_penalty(10, 0.01, None, regularization="smooth")
 terms = est.evaluate_objective_terms(result)
 print("Objective terms:")
 for k, v in terms.items():

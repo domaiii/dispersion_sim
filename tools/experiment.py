@@ -243,7 +243,7 @@ class SingleExperiment:
         # 2) Wind Reconstruction (if not oracle case)
         if not self.use_true_wind:
             air.reset_random_measurements(self.p_wind, self.wind_seed)
-            u_est = air.solve(maxit=5).sub(0).collapse()
+            u_est = air.solve_minimum_residual(maxit=5).sub(0).collapse()
         else:
             u_est = u_true
 

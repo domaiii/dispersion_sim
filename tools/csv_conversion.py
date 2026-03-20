@@ -263,12 +263,54 @@ def load_from_3Dcsv(
     dest.x.scatter_forward()
 
 
+def csv_layer_to_bp(
+    meshfile: str | Path,
+    wind_csv: str | Path,
+    output_bp: str | Path,
+    height: float,
+    z_tol: float,
+    deg_u: int = 2,
+    function_name: str = "velocity_H2",
+    meshtags_name: str = "facet_tags",
+    max_xy_dist: float | None = None,
+) -> Path:
+    """
+    Load a 2D wind slice from CSV onto a mesh and write it as an ADIOS BP checkpoint.
+
+    The CSV values are mapped to FEM nodes by nearest-neighbor lookup in XY.
+    """
+    meshfile = Path(meshfile).resolve(strict=True)
+    wind_csv = Path(wind_csv).resolve(strict=True)
+    output_bp = Path(output_bp).resolve()
+
+    domain, _, facet_tags = dio.gmshio.read_from_msh(meshfile, MPI.COMM_WORLD, gdim=2)
+    elem_u = element("Lagrange", domain.basix_cell(), deg_u, shape=(domain.geometry.dim,))
+    V = fem.functionspace(domain, elem_u)
+
+    velocity = fem.Function(V)
+    load_from_3Dcsv(
+        wind_csv=wind_csv,
+        height=height,
+        z_tol=z_tol,
+        dest=velocity,
+        max_xy_dist=max_xy_dist,
+    )
+
+    adios4dolfinx.write_mesh(output_bp, domain)
+    adios4dolfinx.write_meshtags(output_bp, domain, facet_tags, meshtag_name=meshtags_name)
+    adios4dolfinx.write_function(output_bp, velocity, name=function_name)
+    return output_bp
+
+
 if __name__ == "__main__":
 
-    csv_wind = "/app/csv_wind_data/10x6_central_obstacle/wind_solution.csv"
-    save_dir = "/app/csv_wind_data/10x6_central_obstacle/csv_wind_sample_sets"
-    seeds = np.arange(10)
-    sample_point_sizes = [400]
-    for seed in seeds:
-        for n_points in sample_point_sizes:
-            create_sample_points_with_wind_csv(csv_wind, n_points, seed, 1.0, 0.15, save_dir)
+    csv_layer_to_bp(
+        meshfile=Path("/app/exp_sample_based_estimation/exp_wind_comparison/10x6_mesh/mesh.msh"),
+        wind_csv=Path("/app/csv_wind_data/10x6_central_obstacle/wind_solution.csv"),
+        output_bp=Path("/app/exp_sample_based_estimation/exp_wind_comparison/airflow_10x6_ground_truth_coarse.bp"),
+        height=1.0,
+        z_tol=0.3,
+        deg_u=2,
+        function_name="velocity_H2",
+        meshtags_name="facet_tags",
+    )

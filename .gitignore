@@ -5,7 +5,7 @@ __pycache__
 *.png
 *.DS_Store
 .vscode/
-
+*.DS_Store
 build/
 install/
 log/

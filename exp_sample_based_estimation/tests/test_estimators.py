@@ -55,7 +55,7 @@ air_old.add_dirichlet_bc([bc_no_slip, bc_out])
 
 # 3. Windmessungen erzeugen + Wind schätzen
 air_old.reset_random_measurements(p=100, seed=42)
-u_est = air_old.solve(maxit=5).sub(0).collapse()
+u_est = air_old.solve_minimum_residual(maxit=5).sub(0).collapse()
 
 
 # 4. GasEstimator erzeugen basierend auf geschätztem Wind

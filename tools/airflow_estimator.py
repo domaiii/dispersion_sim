@@ -7,13 +7,17 @@ import pandas as pd
 from mpi4py import MPI
 from pathlib import Path
 from scipy.spatial import cKDTree
+from typing import Callable
 from ufl import grad, div, dot, inner, dx
 from basix.ufl import element, mixed_element
 from dolfinx import fem, mesh
 from dolfinx.fem.petsc import assemble_vector, assemble_matrix
 from petsc4py import PETSc
+import scipy.sparse as sps
+from scipy.sparse.linalg import lsqr
 
 class AirflowEstimator:
+
     def __init__(self,
                  domain: mesh.Mesh,
                  w_measured: fem.Function,
@@ -21,7 +25,9 @@ class AirflowEstimator:
                  kin_viscosity: float = 1.5e-4,
                  weight_misfit: float = 1.0,
                  weight_pde_error: float = 1.0,
-                 weight_reg: float = 1e-2):
+                 weight_reg: float = 1e-2,
+                 weight_boundary: float = 1000.0,
+                 regularization_mode: str = "smooth"):
         """
         Initialisiert den Estimator OHNE Boundary Conditions.
         Alle Funktionsräume werden aufgebaut, damit man sie direkt für BCs nutzen kann.
@@ -30,24 +36,24 @@ class AirflowEstimator:
         self.measurement_ids_W = np.asarray(measurement_ids_W, dtype=np.int32)
         self.w_measured = w_measured
 
-        # Create spaces
         (self.W, self.W0, self.W1,
          self.V, self.Q,
          self.V_to_W, self.Q_to_W) = self.build_mixed_space(domain)
         
         self.domain.topology.create_connectivity(domain.topology.dim - 1, domain.topology.dim)
         
-        # Parameters
         self.viscosity = kin_viscosity
         self.weight_misfit = weight_misfit
         self.weight_pde_error = weight_pde_error
         self.weight_reg = weight_reg
+        self.weight_boundary = weight_boundary
+        self.regularization_mode = self._normalize_regularization_mode(regularization_mode)
 
-        # Optional
         self.bcs: list[fem.DirichletBC] = []
         self.facet_tags = None
         self.w_final: fem.Function | None = None
         self.ground_truth: fem.Function | None = None
+        self._smooth_lsq_operator: sps.csr_matrix | None = None
 
         self._boundary_name_to_id: dict[str, int] = {}
 
@@ -83,15 +89,12 @@ class AirflowEstimator:
         domain = adios4dolfinx.read_mesh(bp_path, MPI.COMM_WORLD)
         W, W0, W1, V, Q, V_to_W, Q_to_W = cls.build_mixed_space(domain)
 
-        # Ground truth velocity in V
         u_true = fem.Function(V)
         adios4dolfinx.read_function(bp_path, u_true, name=fun_name)
 
-        # Embed into mixed space W as (u_true, p=0)
         w_true = fem.Function(W)
         w_true.sub(0).interpolate(u_true)
 
-        # Random sampling of velocity DOFs in V
         coords_P2 = V.tabulate_dof_coordinates()
         rng = np.random.default_rng(seed)
         sample_ids = rng.choice(len(coords_P2), size=p, replace=False)
@@ -99,16 +102,13 @@ class AirflowEstimator:
         velocity_ids_V = np.stack((x_ids, y_ids)).T.flatten()
         measurement_ids_W = np.asarray(V_to_W, dtype=np.int32)[velocity_ids_V]
 
-        # Measured mixed field
         w_measured = fem.Function(W)
         w_measured.x.array[:] = 0.0
         w_measured.x.array[measurement_ids_W] = w_true.x.array[measurement_ids_W]
 
-        # Build estimator
         est = cls(domain, w_measured, measurement_ids_W)
         est.set_ground_truth(w_true)
 
-        # Read facet tags from bp (if available)
         if meshtags_name is not None:
             try:
                 tags = adios4dolfinx.read_meshtags(bp_path, domain, meshtags_name)
@@ -119,7 +119,6 @@ class AirflowEstimator:
 
         est.facet_tags = tags
 
-        # Optional: read physical names from meshfile
         if meshfile is not None:
             est._boundary_name_to_id = cls._read_physical_name_map(meshfile)
         else:
@@ -157,7 +156,6 @@ class AirflowEstimator:
             self.facet_tags.find(self._boundary_name_to_id[name]) for name in names
         ])
 
-        # u = 0 on these facets
         u_D = fem.Function(self.V)
         u_D.x.array[:] = 0.0
 
@@ -212,8 +210,16 @@ class AirflowEstimator:
         Q, Q_to_W = W1.collapse()
         return W, W0, W1, V, Q, np.array(V_to_W, dtype=np.int32), np.array(Q_to_W, dtype=np.int32)
 
+    @staticmethod
+    def _num_dofs(space) -> int:
+        return space.dofmap.index_map.size_global * space.dofmap.index_map_bs
 
-    def solve(self, maxit: int = 10, tol: float = 1e-2, damping: float | None = None):
+
+    def _solve_fixed_point(self,
+                           system_generator: Callable[[fem.Function], tuple[PETSc.Mat, PETSc.Vec]],
+                           maxit: int = 10,
+                           tol: float = 1e-2,
+                           damping: float | None = None):
         if not self.bcs:
             raise ValueError("No boundary conditions set. Use add_dirichlet_bc() to add BCs.")
 
@@ -222,7 +228,7 @@ class AirflowEstimator:
         wh_prev = fem.Function(W)
 
         for k in range(maxit):
-            A, b = self._build_linear_system(wh_prev)
+            A, b = system_generator(wh_prev)
 
             ksp = PETSc.KSP().create(A.comm)
             ksp.setOperators(A)
@@ -234,9 +240,7 @@ class AirflowEstimator:
             wh.x.array[:] = wh.x.petsc_vec.getArray(readonly=True)
 
             step_norm = np.linalg.norm(wh_prev.x.array - wh.x.array)
-            #print(f"Iter {k}: step_norm = {step_norm:.3e}")
             if step_norm < tol:
-                #print(f"Converged after {k+1} iterations.")
                 break
 
             if damping is not None and 0.0 < damping < 1.0:
@@ -246,7 +250,112 @@ class AirflowEstimator:
 
         self.w_final = wh
         return self.w_final
-    
+
+    @staticmethod
+    def _normalize_regularization_mode(mode: str) -> str:
+        mode_norm = mode.strip().lower()
+        if mode_norm not in {"smooth", "value"}:
+            raise ValueError("regularization mode must be 'smooth' or 'value'.")
+        return mode_norm
+
+    def set_regularization(self, mode: str):
+        self.regularization_mode = self._normalize_regularization_mode(mode)
+
+    def _resolve_regularization_mode(self, mode: str | None = None) -> str:
+        if mode is None:
+            return self.regularization_mode
+        return self._normalize_regularization_mode(mode)
+
+    def solve_minimum_residual(self,
+                               maxit: int = 10,
+                               tol: float = 1e-2,
+                               damping: float | None = None,
+                               regularization: str | None = None):
+        """Solve via direct minimum-residual formulation with strong Dirichlet BCs."""
+        reg_mode = self._resolve_regularization_mode(regularization)
+        return self._solve_fixed_point(
+            system_generator=lambda wh_prev: self._build_min_residual_system(wh_prev, reg_mode=reg_mode),
+            maxit=maxit,
+            tol=tol,
+            damping=damping,
+        )
+
+    def solve_weak_penalty(self,
+                           maxit: int = 10,
+                           tol: float = 1e-2,
+                           damping: float | None = None,
+                           regularization: str | None = None):
+        """Solve via weak-form Galerkin system with penalty terms for BCs and measurements."""
+        reg_mode = self._resolve_regularization_mode(regularization)
+        return self._solve_fixed_point(
+            system_generator=lambda wh_prev: self._build_weak_form_system_penalty(wh_prev, reg_mode=reg_mode),
+            maxit=maxit,
+            tol=tol,
+            damping=damping,
+        )
+
+    def solve_linear_least_squares(self,
+                                   maxit: int = 10,
+                                   tol: float = 1e-3,
+                                   regularization: str | None = None):
+        """Solve the stacked weak-form system as an overdetermined linear least-squares problem."""
+        reg_mode = self._resolve_regularization_mode(regularization)
+        wh = fem.Function(self.W)
+        wh_prev = fem.Function(self.W)
+        wh_prev.x.array[:] = 0.0
+
+        num_total_dofs = self._num_dofs(self.W)
+        reg_op = self._build_linear_regularization_operator(reg_mode=reg_mode)
+
+        for k in range(maxit):
+            K_petsc, f_petsc = self._build_weak_form_system(wh_prev)
+            ai, aj, av = K_petsc.getValuesCSR()
+            K_sp = sps.csr_matrix((av, aj, ai), shape=(num_total_dofs, num_total_dofs))
+            f_np = f_petsc.array.reshape(-1, 1)
+
+            bc_rows, bc_cols, bc_vals, bc_rhs = [], [], [], []
+            for bc in self.bcs:
+                for dof in bc.dof_indices()[0]:
+                    bc_rows.append(len(bc_rows))
+                    bc_cols.append(dof)
+                    bc_vals.append(1.0)
+                    bc_rhs.append(0.0)
+            R_sp = sps.csr_matrix((bc_vals, (bc_rows, bc_cols)), shape=(len(bc_rows), num_total_dofs))
+            r_np = np.zeros((len(bc_rows), 1))
+
+            m_idx = self.measurement_ids_W
+            m_val = self.w_measured.x.array[m_idx].reshape(-1, 1)
+            M_sp = sps.csr_matrix((np.ones_like(m_idx, dtype=float), (np.arange(len(m_idx)), m_idx)),
+                                  shape=(len(m_idx), num_total_dofs))
+
+            A_stack = sps.vstack([
+                np.sqrt(self.weight_pde_error) * K_sp,
+                np.sqrt(self.weight_boundary) * R_sp,
+                np.sqrt(self.weight_misfit) * M_sp,
+                np.sqrt(self.weight_reg) * reg_op,
+            ]).tocsr()
+
+            zeros_reg = np.zeros((reg_op.shape[0], 1))
+            b_stack = np.vstack([
+                -np.sqrt(self.weight_pde_error) * f_np,
+                np.sqrt(self.weight_boundary) * r_np,
+                np.sqrt(self.weight_misfit) * m_val,
+                zeros_reg,
+            ]).reshape(-1)
+
+            res = lsqr(A_stack, b_stack, iter_lim=5000)[0]
+            wh.x.array[:] = res
+
+            diff = np.linalg.norm(wh.x.array - wh_prev.x.array) / (np.linalg.norm(wh.x.array) + 1e-10)
+            print(f"Iteration {k}: Rel. Error = {diff:.2e}")
+
+            if diff < tol:
+                break
+            wh_prev.x.array[:] = wh.x.array
+
+        self.w_final = wh
+        return wh
+
     def add_dirichlet_bc(self, bc: fem.DirichletBC | list[fem.DirichletBC]):
         if isinstance(bc, list):
             self.bcs += bc
@@ -289,6 +398,7 @@ class AirflowEstimator:
         self.w_measured.x.array[ids] = values
         self.measurement_ids_W = ids
         self.w_final = None
+        self._smooth_lsq_operator = None
 
     def set_measurements_from_csv(
         self,
@@ -393,7 +503,6 @@ class AirflowEstimator:
         y_ids = sample_ids * 2 + 1
         velocity_ids_V = np.stack((x_ids, y_ids)).T.flatten()
 
-        # Mapping in W
         measurement_ids_W = self.V_to_W[velocity_ids_V]
         measurement_values = self.ground_truth.x.array[measurement_ids_W]
         self.set_measurements(
@@ -411,7 +520,8 @@ class AirflowEstimator:
     def set_weights(self, kin_v: float | None = None, 
                           misfit: float | None = None, 
                           pde_err: float | None = None, 
-                          reg: float | None = None):
+                          reg: float | None = None,
+                          boundary: float | None = None):
         if kin_v is not None:
             self.viscosity = kin_v
         if misfit is not None:
@@ -420,6 +530,8 @@ class AirflowEstimator:
             self.weight_pde_error = pde_err
         if reg is not None:
             self.weight_reg = reg
+        if boundary is not None:
+            self.weight_boundary = boundary
         
     def get_measurement_coordinates(self) -> np.ndarray:
         """Rekonstruiere Messpunkt-Koordinaten aus measurement_ids_W."""
@@ -429,14 +541,16 @@ class AirflowEstimator:
         measured_v_ids_unique = np.unique(np.array(measured_v_ids) // self.domain.geometry.dim)
         return coords_P2[measured_v_ids_unique]
 
-    def evaluate_objective_terms(self, wh: fem.Function | None = None) -> dict[str, float]:
+    def evaluate_objective_terms(self,
+                                 wh: fem.Function | None = None,
+                                 regularization: str | None = None) -> dict[str, float]:
         """
         Evaluate objective contributions for a given mixed field `wh`.
         Returns unweighted and weighted values of PDE error, regularization, and data misfit.
         """
         if wh is None:
             if self.w_final is None:
-                raise ValueError("No solution available. Call solve() first or provide `wh`.")
+                raise ValueError("No solution available. Call a solve_* method first or provide `wh`.")
             wh = self.w_final
 
         domain = self.domain
@@ -444,14 +558,17 @@ class AirflowEstimator:
         beta = float(self.weight_pde_error)
         gamma = float(self.weight_reg)
         alpha = float(self.weight_misfit)
+        reg_mode = self._resolve_regularization_mode(regularization)
 
         uh, ph = ufl.split(wh)
-        # Keep consistency with final fixed-point state: use uh as advecting field.
         Rmom = -nu * div(grad(uh)) + dot(uh, grad(uh)) + grad(ph)
         Rdiv = div(uh)
 
         pde_unweighted_form = fem.form((inner(Rmom, Rmom) + Rdiv * Rdiv) * dx)
-        reg_unweighted_form = fem.form((inner(grad(uh), grad(uh)) + inner(uh, uh)) * dx)
+        if reg_mode == "value":
+            reg_unweighted_form = fem.form(inner(uh, uh) * dx)
+        else:
+            reg_unweighted_form = fem.form(inner(grad(uh), grad(uh)) * dx)
 
         pde_unweighted_local = fem.assemble_scalar(pde_unweighted_form)
         reg_unweighted_local = fem.assemble_scalar(reg_unweighted_form)
@@ -480,36 +597,36 @@ class AirflowEstimator:
             "objective_total_weighted": float(pde_weighted + reg_weighted + misfit_weighted),
         }
 
-    def _build_linear_system(self, wh_prev: fem.Function):
+    def _build_min_residual_system(self, wh_prev: fem.Function, reg_mode: str | None = None):
         """Baut das gesamte lineare System (A, b) inkl. PDE, Regularisierung und Daten-Misfit."""
 
         W = wh_prev.function_space
         domain = W.mesh
+        reg_mode = self._resolve_regularization_mode(reg_mode)
 
-        # Konstanten
         nu    = fem.Constant(domain, PETSc.ScalarType(self.viscosity))
         beta  = fem.Constant(domain, PETSc.ScalarType(self.weight_pde_error))
         gamma = fem.Constant(domain, PETSc.ScalarType(self.weight_reg))
 
-        # Test-/Trial-Funktionen
         uh_prev, _ = wh_prev.split()
         (u, p) = ufl.TrialFunctions(W)
         (v, q) = ufl.TestFunctions(W)
 
-        # PDE Residuen (Least-Squares)
         Rmom_u = -nu * div(grad(u)) + dot(uh_prev, grad(u)) + grad(p)
         Rmom_v = -nu * div(grad(v)) + dot(uh_prev, grad(v)) + grad(q)
         Rdiv_u = div(u)
         Rdiv_v = div(v)
 
         a_pde = (beta * (inner(Rmom_u, Rmom_v) + Rdiv_u * Rdiv_v)) * dx
-        #a_reg = (gamma * inner(grad(u), grad(v))) * dx # regularization with ||grad(u)||
-        a_reg = (gamma * inner(u, v)) * dx # regularization with ||u||
+        if reg_mode == "value":
+            a_reg = (gamma * inner(u, v)) * dx
+        else:
+            a_reg = (gamma * inner(grad(u), grad(v))) * dx
 
         zero_vec = fem.Constant(domain, PETSc.ScalarType((0.0,) * domain.geometry.dim))
         L = inner(zero_vec, v) * dx
 
-        # --- Assemble mit BCs
+        # Strong BC assembly
         aF, LF = fem.form(a_pde + a_reg), fem.form(L)
         A = assemble_matrix(aF, bcs=self.bcs); A.assemble()
         b = assemble_vector(LF)
@@ -517,7 +634,7 @@ class AirflowEstimator:
         b.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
         fem.set_bc(b, self.bcs)
 
-        # --- DOF-Penalty (Messdaten)
+        # Measurement penalty
         S = PETSc.Mat().createAIJ(A.getSizes(), nnz=1, comm=A.comm); S.setUp()
         for i in map(int, self.measurement_ids_W):
             S.setValue(i, i, 1.0)
@@ -529,3 +646,139 @@ class AirflowEstimator:
         A.axpy(self.weight_misfit, S, structure=PETSc.Mat.Structure.DIFFERENT_NONZERO_PATTERN)
         b.axpy(self.weight_misfit, rhs_add)
         return A, b
+
+    def _build_weak_form_system(self, wh_prev: fem.Function):
+        (u, p) = ufl.TrialFunctions(self.W)
+        (v, q) = ufl.TestFunctions(self.W)
+        uh_prev, _ = ufl.split(wh_prev)
+
+        nu = fem.Constant(self.domain, PETSc.ScalarType(self.viscosity))
+        
+        a_form = fem.form((
+            inner(nu * grad(u), grad(v)) 
+            + inner(grad(u) * uh_prev, v) 
+            - p * div(v) + q * div(u)
+        ) * dx)
+
+        f_form = fem.form(inner(fem.Constant(self.domain, PETSc.ScalarType((0,0))), v) * dx)
+
+        K = assemble_matrix(a_form)
+        K.assemble()
+        f = assemble_vector(f_form)
+        
+        return K, f
+    
+    def _build_weak_form_system_penalty(self, wh_prev: fem.Function, reg_mode: str | None = None):
+        uh_prev, _ = wh_prev.split()
+        (u, p) = ufl.TrialFunctions(self.W)
+        (v, q) = ufl.TestFunctions(self.W)
+        domain = self.domain
+        reg_mode = self._resolve_regularization_mode(reg_mode)
+
+        nu = fem.Constant(domain, PETSc.ScalarType(self.viscosity))
+        w_pde = fem.Constant(domain, PETSc.ScalarType(self.weight_pde_error)) 
+        w_reg = fem.Constant(domain, PETSc.ScalarType(self.weight_reg))
+
+        if reg_mode == "value":
+            reg_term = inner(u, v)
+        else:
+            reg_term = inner(grad(u), grad(v))
+
+        a_form = fem.form((
+            w_pde * (inner(nu * grad(u), grad(v)) 
+            + inner(grad(u) * uh_prev, v) 
+            - p * div(v) + q * div(u))
+            + w_reg * reg_term
+        ) * dx)
+
+        zero_vec = fem.Constant(domain, PETSc.ScalarType((0.0,) * domain.geometry.dim))
+        L_form = fem.form(inner(zero_vec, v) * dx)
+
+        K_reg = assemble_matrix(a_form) 
+        K_reg.assemble()
+        f_reg = assemble_vector(L_form)
+
+        # Boundary penalty
+        R = PETSc.Mat().createAIJ(K_reg.getSizes(), nnz=1, comm=K_reg.comm)
+        R.setUp()
+        r_vec = f_reg.duplicate()
+        r_vec.set(0.0)
+
+        w_bc = self.weight_boundary
+
+        for bc in self.bcs:
+            dofs = bc.dof_indices()[0]
+            for dof in dofs:
+                R.setValue(dof, dof, 1.0)
+        R.assemble()
+
+        # Measurement penalty
+        S = PETSc.Mat().createAIJ(K_reg.getSizes(), nnz=1, comm=K_reg.comm)
+        S.setUp()
+        for i in map(int, self.measurement_ids_W):
+            S.setValue(i, i, 1.0)
+        S.assemble()
+        
+        s_vec = self.w_measured.x.petsc_vec.duplicate()
+        S.mult(self.w_measured.x.petsc_vec, s_vec)
+
+        K_reg.axpy(w_bc, R, structure=PETSc.Mat.Structure.DIFFERENT_NONZERO_PATTERN)
+        K_reg.axpy(self.weight_misfit, S, structure=PETSc.Mat.Structure.DIFFERENT_NONZERO_PATTERN)
+
+        f_reg.axpy(w_bc, r_vec)
+        f_reg.axpy(self.weight_misfit, s_vec)
+
+        diag = K_reg.getDiagonal()
+        if diag.min()[0] < 1e-15:
+            print(f"WARNUNG: Matrix hat extrem kleine Diagonalelemente! Min: {diag.min()[0]}")
+        if np.any(np.isnan(f_reg.array)):
+            print("FEHLER: f_reg enthält NaNs!")
+            
+        return K_reg, f_reg
+
+    def _build_linear_regularization_operator(self, reg_mode: str | None = None) -> sps.csr_matrix:
+        reg_mode = self._resolve_regularization_mode(reg_mode)
+        num_total_dofs = self._num_dofs(self.W)
+
+        if reg_mode == "value":
+            v_map = self.W.sub(0).dofmap
+            u_dofs = np.unique(v_map.list.flatten())
+            rows = np.arange(len(u_dofs))
+            return sps.csr_matrix((np.ones_like(u_dofs, dtype=float), (rows, u_dofs)),
+                                  shape=(len(u_dofs), num_total_dofs))
+
+        if self._smooth_lsq_operator is not None:
+            return self._smooth_lsq_operator
+
+        coords = np.asarray(self.V.tabulate_dof_coordinates(), dtype=float)[:, :self.domain.geometry.dim]
+        num_points = len(coords)
+        if num_points < 2:
+            self._smooth_lsq_operator = sps.csr_matrix((0, num_total_dofs))
+            return self._smooth_lsq_operator
+
+        k = min(5, num_points)
+        tree = cKDTree(coords)
+        dists, neighbors = tree.query(coords, k=k, p=2.0, workers=-1)
+
+        rows, cols, vals = [], [], []
+        row_id = 0
+        seen_edges: set[tuple[int, int]] = set()
+        dim = self.domain.geometry.dim
+
+        for i in range(num_points):
+            for dist_ij, j in zip(np.atleast_1d(dists[i])[1:], np.atleast_1d(neighbors[i])[1:]):
+                edge = (i, int(j)) if i < int(j) else (int(j), i)
+                if edge[0] == edge[1] or edge in seen_edges:
+                    continue
+                seen_edges.add(edge)
+                weight = 1.0 / max(float(dist_ij), 1e-12)
+                for comp in range(dim):
+                    wi = int(self.V_to_W[i * dim + comp])
+                    wj = int(self.V_to_W[int(j) * dim + comp])
+                    rows.extend([row_id, row_id])
+                    cols.extend([wi, wj])
+                    vals.extend([weight, -weight])
+                    row_id += 1
+
+        self._smooth_lsq_operator = sps.csr_matrix((vals, (rows, cols)), shape=(row_id, num_total_dofs))
+        return self._smooth_lsq_operator
