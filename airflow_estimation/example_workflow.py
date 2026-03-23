@@ -13,7 +13,7 @@ from tools.visualizer import Visualizer2D
 bpfile   = Path("/home/dominik/git/dispersion_sim/wind_data/airflow_picard.bp")
 meshfile = Path("/home/dominik/git/dispersion_sim/meshes/rectangle_circular_holes/mesh.msh")
 
-est = AirflowEstimator.from_file(bpfile, fun_name="velocity_H2", meshtags_name="facet_tags", p=100, seed=15)
+est = AirflowEstimator.from_bp(bpfile, fun_name="velocity_H2", meshtags_name="facet_tags", p=100, seed=15)
 est.set_weights(kin_v=1.5e-3, misfit=1e2, pde_err=1.0, reg=1e-3)
 
 # Boundary conditions

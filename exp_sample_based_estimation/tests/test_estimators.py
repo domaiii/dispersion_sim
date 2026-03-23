@@ -15,7 +15,7 @@ WDIR = Path(__file__).parent.resolve()
 bpfile = WDIR / "airflow.bp"
 meshfile = WDIR / "mesh/mesh.msh"
 
-air_old = AirflowEstimator.from_file(
+air_old = AirflowEstimator.from_bp(
     bpfile,
     fun_name="velocity_H2",
     meshtags_name="facet_tags",

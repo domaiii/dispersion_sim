@@ -9,8 +9,8 @@ from tools.visualizer import MatplotlibVisualizer2D
 bpfile   = Path("/app/exp_sample_based_estimation/exp_wind_comparison/airflow_10x6_ground_truth.bp")
 meshfile = Path("/app/exp_sample_based_estimation/exp_wind_comparison/10x6_mesh/mesh.msh")
 
-est = AirflowEstimator.from_file(bpfile, fun_name="velocity_H2", meshtags_name="facet_tags", p=25, seed=5)
-est.set_weights(kin_v=1.5e-2, misfit=1e1, pde_err=1e0, reg=1e-5, boundary=1e2)
+est = AirflowEstimator.from_bp(bpfile, fun_name="velocity_H2", meshtags_name="facet_tags", p=25, seed=5)
+est.set_weights(kin_v=1.5e-3, misfit=1e0, pde_err=1e0, reg=1e-, boundary=1e4)
 
 # Boundary conditions
 V = est.V
@@ -48,12 +48,9 @@ bc_out = fem.dirichletbc(p_zero, dofs_out, W1)
 
 est.add_dirichlet_bc([bc_no_slip, bc_out])
 
-result = est.solve_linear_least_squares(100, 0.001, regularization="smooth")
-#result = est.solve_weak_penalty(10, 0.01, None, regularization="smooth")
-terms = est.evaluate_objective_terms(result)
-print("Objective terms:")
-for k, v in terms.items():
-    print(f"  {k:>24s}: {v:.6e}")
+# result = est.solve_linear_least_squares(25, 0.001, regularization="smooth", verbose=True)
+# result = est.solve_weak_penalty(10, 0.01, None, regularization="smooth")
+result = est.solve_minimum_residual(25, 0.01, None, "smooth", True)
 u_est  = result.sub(0).collapse()
 
 vis = MatplotlibVisualizer2D(u_est.function_space)

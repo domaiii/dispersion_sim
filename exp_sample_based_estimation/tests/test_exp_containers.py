@@ -18,7 +18,7 @@ WDIR = Path(__file__).parent.resolve()
 bpfile   = WDIR / "airflow.bp"
 meshfile = WDIR / "mesh/mesh.msh"
 
-air_new = AirflowEstimator.from_file(
+air_new = AirflowEstimator.from_bp(
     bpfile,
     p=100,
     seed=42,
@@ -86,4 +86,3 @@ vis3.add_background_mesh()
 vis3.add_points(result.wind_sample_coords, color="orange", size=12, label="Wind Measurements")
 vis3.add_vector_field("Estimated Wind", result.u_est)
 vis3.show("Airflow Estimation")
-

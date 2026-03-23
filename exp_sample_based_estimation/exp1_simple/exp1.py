@@ -17,7 +17,7 @@ WDIR = Path(__file__).parent.resolve()
 bpfile   = WDIR / "airflow.bp"
 meshfile = WDIR / "mesh/mesh.msh"
 
-air_new = AirflowEstimator.from_file(bpfile, fun_name="velocity_H2", meshfile=meshfile)
+air_new = AirflowEstimator.from_bp(bpfile, fun_name="velocity_H2", meshfile=meshfile)
 
 air_new.set_weights(
     kin_v=1.5e-4,
@@ -225,4 +225,3 @@ run_experiment_grid(
     wind_seeds, gas_seeds,
     sigma, gas_gamma_reg
 )
-
