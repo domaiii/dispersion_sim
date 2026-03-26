@@ -15,14 +15,14 @@ from ufl import dx, inner
 from tools.airflow_estimator import AirflowEstimator
 
 
-BPFILE = Path("/app/exp_sample_based_estimation/exp_wind_comparison/airflow_10x6_ground_truth.bp")
+BPFILE = Path("/app/exp_sample_based_estimation/exp_wind_comparison/airflow_10x6_ground_truth_ipcs.bp")
 MESHFILE = Path("/app/exp_sample_based_estimation/exp_wind_comparison/10x6_mesh/mesh.msh")
 OUTPUT_DIR = Path("/app/exp_sample_based_estimation/exp_wind_comparison/solver_weight_sweep")
 
 MEASUREMENT_COUNTS = [10, 25, 50, 100, 200]
 SEEDS = [0, 1, 2]
 
-KINEMATIC_VISCOSITY = 1.5e-3
+KINEMATIC_VISCOSITY = 1.5e-4
 REGULARIZATION_MODE = "smooth"
 
 
