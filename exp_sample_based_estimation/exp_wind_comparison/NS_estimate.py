@@ -6,11 +6,11 @@ from tools.airflow_estimator import AirflowEstimator
 from tools.visualizer import MatplotlibVisualizer2D
 
 # Example usage 
-bpfile   = Path("/app/exp_sample_based_estimation/exp_wind_comparison/airflow_10x6_ground_truth_ipcs.bp")
-meshfile = Path("/app/exp_sample_based_estimation/exp_wind_comparison/10x6_mesh/mesh.msh")
+bpfile   = Path("/app/exp_sample_based_estimation/exp_wind_comparison/data/airflow_10x6_ground_truth.bp")
+meshfile = Path("/app/exp_sample_based_estimation/exp_wind_comparison/data/10x6_mesh/mesh.msh")
 
-est = AirflowEstimator.from_bp(bpfile, fun_name="velocity_H2", meshtags_name="facet_tags", p=45, seed=5)
-est.set_weights(kin_v=1.5e-5, misfit=1e3, pde_err=1e0, reg=1e-2, boundary=1e5)
+est = AirflowEstimator.from_bp(bpfile, fun_name="velocity_H2", meshtags_name="facet_tags", p=30, seed=5)
+est.set_weights(kin_v=1.5e-5, misfit=1e2, pde_err=1e0, reg=1e-2, boundary=1e5)
 
 # Boundary conditions
 V = est.V
