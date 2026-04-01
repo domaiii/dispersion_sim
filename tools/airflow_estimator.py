@@ -22,12 +22,20 @@ class AirflowMeasurements:
 
     def set_from_csv(self,
                      samples_csv: str | Path,
-                     unique_nodes: bool = True,
-                     max_xy_dist: float | None = None,
-                     clear_existing: bool = True) -> dict[str, float]:
+                     count: int | None = None,
+                     max_xy_dist: float | None = None) -> dict[str, float]:
         samples_csv = Path(samples_csv).resolve(strict=True)
-
         df = pd.read_csv(samples_csv)
+        if count is not None:
+            count = int(count)
+            if count < 1:
+                raise ValueError(f"count must be at least 1, got {count}.")
+            if count > len(df):
+                raise ValueError(
+                    f"Requested {count} measurements from {samples_csv.name}, but file only contains {len(df)} rows."
+                )
+            df = df.iloc[:count].copy()
+
         required = ["x", "y", "wind_x", "wind_y"]
         missing = [c for c in required if c not in df.columns]
         if missing:
@@ -50,16 +58,13 @@ class AirflowMeasurements:
             raise ValueError(
                 f"Maximum XY mapping distance exceeded: {max_dist:.6g} > {max_xy_dist:.6g}"
             )
-
         n_input = int(len(node_ids))
-        n_dropped = 0
-        if unique_nodes:
-            _, first_idx = np.unique(node_ids, return_index=True)
-            keep = np.sort(first_idx)
-            n_dropped = n_input - int(len(keep))
-            node_ids = node_ids[keep]
-            samples_uv = samples_uv[keep]
-            dist = dist[keep]
+        _, first_idx = np.unique(node_ids, return_index=True)
+        keep = np.sort(first_idx)
+        n_dropped = n_input - int(len(keep))
+        node_ids = node_ids[keep]
+        samples_uv = samples_uv[keep]
+        dist = dist[keep]
 
         x_ids = node_ids * 2
         y_ids = node_ids * 2 + 1
@@ -70,7 +75,7 @@ class AirflowMeasurements:
         self.estimator.set_measurements(
             measurement_ids_W=measurement_ids_W,
             measurement_values=measurement_values,
-            clear_existing=clear_existing,
+            clear_existing=True,
         )
 
         return {
@@ -435,9 +440,8 @@ class AirflowEstimator:
     def set_measurements_from_csv(
         self,
         samples_csv: str | Path,
-        unique_nodes: bool = True,
+        count: int | None = None,
         max_xy_dist: float | None = None,
-        clear_existing: bool = True,
     ) -> dict[str, float]:
         """
         Load wind samples from CSV and map them to nearest velocity nodes.
@@ -448,12 +452,10 @@ class AirflowEstimator:
         ----------
         samples_csv : str | Path
             Path to sample CSV.
-        unique_nodes : bool
-            If True, keep only first sample per matched FEM node.
+        count : int | None
+            Optional number of rows to import from the top of the CSV. If omitted, all rows are used.
         max_xy_dist : float | None
             Optional maximum allowed nearest-neighbor mapping distance in XY.
-        clear_existing : bool
-            If True, remove all previous measurements before writing new ones.
 
         Returns
         -------
@@ -462,9 +464,8 @@ class AirflowEstimator:
         """
         return self.measurements.set_from_csv(
             samples_csv=samples_csv,
-            unique_nodes=unique_nodes,
+            count=count,
             max_xy_dist=max_xy_dist,
-            clear_existing=clear_existing,
         )
 
     def reset_random_measurements(self, p: int, seed: int | None = None):

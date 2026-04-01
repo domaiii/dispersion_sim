@@ -11,7 +11,7 @@ from basix.ufl import element
 from mpi4py import MPI
 from dolfinx import plot
 
-from visualizer import MatplotlibVisualizer2D
+from tools.visualizer import MatplotlibVisualizer2D
 
 
 def create_sample_points_with_wind_csv(

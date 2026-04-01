@@ -15,6 +15,7 @@ COORD_COLUMNS = ["x", "y"]
 WIND_COLUMNS = ["wind_x", "wind_y"]
 MATCH_DISTANCE_THRESHOLD = 0.03
 GROUND_TRUTH_PLOT_PATH = RESULTS_DIR / "ground_truth_on_gmrf_grid.png"
+SUMMARY_CSV_PATH = RESULTS_DIR / "evaluation_summary.csv"
 
 
 def load_ground_truth_layer() -> pd.DataFrame:
@@ -140,6 +141,7 @@ for sample_size in sample_sizes:
     )
 
 summary = pd.DataFrame(rows).sort_values("sample_size").reset_index(drop=True)
+summary.to_csv(SUMMARY_CSV_PATH, index=False)
 print(summary.to_string(index=False))
 
 fig, ax = plt.subplots(figsize=(6, 4))
@@ -159,3 +161,4 @@ plot_path = RESULTS_DIR / "evaluation_rmse.png"
 fig.savefig(plot_path, dpi=160)
 print(f"\nSaved plot to {plot_path}")
 print(f"Saved plot to {GROUND_TRUTH_PLOT_PATH}")
+print(f"Saved summary to {SUMMARY_CSV_PATH}")

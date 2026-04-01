@@ -3,6 +3,7 @@ import numpy as np
 import pyvista as pv
 import matplotlib.pyplot as plt
 import matplotlib.tri as mtri
+from matplotlib.collections import LineCollection
 from scipy.io import savemat
 from scipy.spatial import cKDTree
 from pathlib import Path
@@ -314,7 +315,7 @@ class MatplotlibVisualizer2D:
             scale_units="xy",
             scale=scale,
             width=width,
-            pivot="mid",
+            pivot="tail",
         )
         self._last_mappable = quiv
 
@@ -385,7 +386,71 @@ class MatplotlibVisualizer2D:
         )
         self._last_mappable = strm.lines
 
-    def show(self, title: str | None = None, filename: str | None = None, show_colorbar=True):
+    def add_boundary_facets(
+        self,
+        facet_tags,
+        tag_styles: dict[int, dict] | None = None,
+        default_color: str = "black",
+        default_linewidth: float = 1.6,
+        default_linestyle: str = "-",
+        alpha: float = 1.0,
+    ):
+        """Overlay tagged boundary facets as line segments on the active axes."""
+        if facet_tags is None:
+            return
+
+        self.mesh.topology.create_connectivity(1, 0)
+        f2v = self.mesh.topology.connectivity(1, 0)
+        if f2v is None:
+            raise RuntimeError("Mesh does not provide facet-to-vertex connectivity.")
+
+        coords = self.mesh.geometry.x[:, :2]
+        seen_labels = set()
+
+        for tag in np.unique(facet_tags.values):
+            facets = facet_tags.indices[facet_tags.values == tag]
+            if len(facets) == 0:
+                continue
+
+            style = dict((tag_styles or {}).get(int(tag), {}))
+            label = style.pop("label", None)
+            color = style.pop("color", default_color)
+            linewidth = style.pop("linewidth", default_linewidth)
+            linestyle = style.pop("linestyle", default_linestyle)
+            tag_alpha = style.pop("alpha", alpha)
+            zorder = style.pop("zorder", 4)
+
+            segments = []
+            for facet in facets:
+                vertices = f2v.links(int(facet))
+                if len(vertices) != 2:
+                    continue
+                segments.append(coords[np.asarray(vertices, dtype=np.int32)])
+
+            if not segments:
+                continue
+
+            collection = LineCollection(
+                segments,
+                colors=color,
+                linewidths=linewidth,
+                linestyles=linestyle,
+                alpha=tag_alpha,
+                zorder=zorder,
+                **style,
+            )
+            if label is not None and label not in seen_labels:
+                collection.set_label(label)
+                seen_labels.add(label)
+            self.ax.add_collection(collection)
+
+    def show(
+        self,
+        title: str | None = None,
+        filename: str | None = None,
+        show_colorbar: bool = True,
+        colorbar_label: str | None = None,
+    ):
         self.ax.set_aspect("equal", adjustable="box")
         self.ax.set_xlabel("x")
         self.ax.set_ylabel("y")
@@ -394,11 +459,18 @@ class MatplotlibVisualizer2D:
 
         if show_colorbar and self._last_mappable is not None:
             cbar = self.fig.colorbar(self._last_mappable, ax=self.ax, pad=0.02)
-            cbar.set_label("Magnitude")
+            if colorbar_label is not None:
+                cbar.set_label(colorbar_label)
 
         handles, labels = self.ax.get_legend_handles_labels()
         if labels:
-            self.ax.legend(loc="best")
+            self.ax.legend(
+                loc="upper center",
+                bbox_to_anchor=(0.5, -0.14),
+                ncol=max(1, len(labels)),
+                frameon=False,
+                borderaxespad=0.0,
+            )
 
         self.fig.tight_layout()
         if filename is not None:
