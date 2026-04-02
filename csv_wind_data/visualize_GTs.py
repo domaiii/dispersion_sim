@@ -5,7 +5,7 @@ from basix.ufl import element
 from dolfinx import fem
 from mpi4py import MPI
 
-from tools.csv_conversion import load_from_3Dcsv
+from tools.csv_utilities import load_from_3Dcsv
 from tools.visualizer import MatplotlibVisualizer2D
 
 SLICE_HEIGHT = 0.025

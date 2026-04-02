@@ -117,14 +117,9 @@ class AirflowEstimator:
 
     def __init__(self,
                  domain: mesh.Mesh,
+                 facet_tags: mesh.MeshTags,
                  w_measured: fem.Function,
-                 measurement_ids_W,
-                 kin_viscosity: float = 1.5e-4,
-                 weight_misfit: float = 1.0,
-                 weight_pde_error: float = 1.0,
-                 weight_reg: float = 1e-2,
-                 weight_boundary: float = 1000.0,
-                 regularization_mode: str = "smooth"):
+                 measurement_ids_W: list):
         """
         Initialisiert den Estimator OHNE Boundary Conditions.
         Alle Funktionsräume werden aufgebaut, damit man sie direkt für BCs nutzen kann.
@@ -139,27 +134,72 @@ class AirflowEstimator:
         
         self.domain.topology.create_connectivity(domain.topology.dim - 1, domain.topology.dim)
         
-        self.viscosity = kin_viscosity
-        self.weight_misfit = weight_misfit
-        self.weight_pde_error = weight_pde_error
-        self.weight_reg = weight_reg
-        self.weight_boundary = weight_boundary
-        self.regularization_mode = self.normalize_regularization_mode(regularization_mode)
+        self.viscosity = 1e-5
+        self.weight_misfit = 1e2
+        self.weight_pde_res = 1e0
+        self.weight_reg = 1e-2
+        self.weight_boundary = 1e4
+        self.regularization_mode = "smooth"
 
         self.bcs: list[fem.DirichletBC] = []
-        self.facet_tags = None
+        self.facet_tags = facet_tags
         self.w_final: fem.Function | None = None
         self.ground_truth: fem.Function | None = None
         self._boundary_name_to_id: dict[str, int] = {}
         self.measurements = AirflowMeasurements(self)
 
     @classmethod
+    def from_domain(cls,
+                    domain: mesh.Mesh,
+                    facet_tags: mesh.MeshTags,
+                    meshfile: str | Path | None = None,
+                    ground_truth: fem.Function | None = None):
+        """
+        Construct estimator from fem domain data from .msh file.
+
+        Parameters
+        ----------
+        domain : mesh.Mesh
+            Existing simulation mesh.
+        facet_tags : mesh.MeshTags
+            Optional facet meshtags matching the domain.
+        meshfile : str | Path | None
+            Optional Gmsh .msh file to recover physical group names.
+        ground_truth : fem.Function | None
+            Optional reference field in either V or W space.
+        """
+        W, _, _, V, _, _, _ = cls.build_mixed_space(domain)
+        w_measured = fem.Function(W)
+        w_measured.x.array[:] = 0.0
+
+        est = cls(
+            domain,
+            facet_tags,
+            w_measured,
+            np.array([], dtype=np.int32)
+        )
+
+        if meshfile is not None:
+            est._boundary_name_to_id = cls._read_physical_name_map(meshfile)
+
+        if ground_truth is not None:
+            if ground_truth.function_space == V:
+                w_truth = fem.Function(W)
+                w_truth.x.array[:] = 0.0
+                w_truth.sub(0).interpolate(ground_truth)
+                est.set_ground_truth(w_truth)
+            else:
+                est.set_ground_truth(ground_truth)
+
+        return est
+
+    @classmethod
     def from_bp(cls,
                 bp_path: Path,
                 p: int | None = 0,
                 seed: int | None = 0,
+                meshtags_name: str = "facet_tags",
                 fun_name: str | None = "velocity",
-                meshtags_name: str | None = "facet_tags",
                 meshfile: Path | None = None):
         """
         Construct estimator from ADIOS bp file.
@@ -201,32 +241,27 @@ class AirflowEstimator:
         w_measured.x.array[:] = 0.0
         w_measured.x.array[measurement_ids_W] = w_true.x.array[measurement_ids_W]
 
-        est = cls(domain, w_measured, measurement_ids_W)
+        try:
+            tags = adios4dolfinx.read_meshtags(bp_path, domain, meshtags_name)
+        except:
+            raise ValueError(f"No meshtags found under name '{meshtags_name}'")
+    
+        est = cls(domain, tags, w_measured, measurement_ids_W)
         est.set_ground_truth(w_true)
 
-        if meshtags_name is not None:
-            try:
-                tags = adios4dolfinx.read_meshtags(bp_path, domain, meshtags_name)
-            except RuntimeError:
-                tags = None
-        else:
-            tags = None
-
-        est.facet_tags = tags
         if meshfile is not None:
             est._boundary_name_to_id = cls._read_physical_name_map(meshfile)
         else:
             est._boundary_name_to_id = {}
         return est
-    
+        
     def _ensure_boundary_name_map(self):
         if self.facet_tags is None:
-            raise RuntimeError("facet_tags is not set. Make sure from_bp "
-                               "was called with a valid meshtags_name.")
-        if not hasattr(self, "_boundary_name_to_id") or not self._boundary_name_to_id:
+            raise RuntimeError("facet_tags is not set.")
+        if not self._boundary_name_to_id:
             raise RuntimeError(
                 "No boundary name->id mapping available. "
-                "Call from_bp(..., meshfile=...) or set _boundary_name_to_id manually."
+                "Provide meshfile during construction or set _boundary_name_to_id manually."
             )
 
     def set_no_slip_bc(self, wall_names: str | list[str]):
@@ -342,7 +377,7 @@ class AirflowEstimator:
             measurement_ids_W=self.measurement_ids_W,
             viscosity=self.viscosity,
             weight_misfit=self.weight_misfit,
-            weight_pde_error=self.weight_pde_error,
+            weight_pde_res=self.weight_pde_res,
             weight_reg=self.weight_reg,
             weight_boundary=self.weight_boundary,
             regularization_mode=self.regularization_mode,
@@ -479,8 +514,7 @@ class AirflowEstimator:
     def set_ground_truth(self, funW: fem.Function):
         if self.ground_truth:
             warnings.warn("Overwriting ground truth data.")
-        else:
-            self.ground_truth = funW
+        self.ground_truth = funW
             
     def set_weights(self, kin_v: float | None = None, 
                           misfit: float | None = None, 
@@ -492,7 +526,7 @@ class AirflowEstimator:
         if misfit is not None:
             self.weight_misfit = misfit
         if pde_err is not None:
-            self.weight_pde_error = pde_err
+            self.weight_pde_res = pde_err
         if reg is not None:
             self.weight_reg = reg
         if boundary is not None:

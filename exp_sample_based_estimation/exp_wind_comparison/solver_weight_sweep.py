@@ -365,7 +365,7 @@ def plot_best_error_metrics(best: pd.DataFrame, outdir: Path):
 def plot_best_weights(best: pd.DataFrame, outdir: Path):
     fields = [
         ("misfit", "weight_misfit"),
-        ("pde_err", "weight_pde_error"),
+        ("pde_err", "weight_pde_res"),
         ("reg", "weight_reg"),
         ("boundary", "weight_boundary"),
     ]

@@ -25,7 +25,7 @@ class AirflowSolverConfig:
     measurement_ids_W: np.ndarray
     viscosity: float
     weight_misfit: float
-    weight_pde_error: float
+    weight_pde_res: float
     weight_reg: float
     weight_boundary: float
     regularization_mode: str
@@ -174,7 +174,7 @@ class MinimumResidualSolver(BaseAirflowSolver):
         domain = W.mesh
 
         nu = fem.Constant(domain, PETSc.ScalarType(self.ctx.viscosity))
-        beta = fem.Constant(domain, PETSc.ScalarType(self.ctx.weight_pde_error))
+        beta = fem.Constant(domain, PETSc.ScalarType(self.ctx.weight_pde_res))
         gamma = fem.Constant(domain, PETSc.ScalarType(self.ctx.weight_reg))
 
         uh_prev, _ = wh_prev.split()
@@ -249,11 +249,11 @@ class MinimumResidualSolver(BaseAirflowSolver):
             "pde_unweighted": pde,
             "reg_unweighted": reg,
             "misfit_unweighted": misfit,
-            "pde_weighted": self.ctx.weight_pde_error * pde,
+            "pde_weighted": self.ctx.weight_pde_res * pde,
             "reg_weighted": self.ctx.weight_reg * reg,
             "misfit_weighted": self.ctx.weight_misfit * misfit,
             "objective_total_weighted": (
-                self.ctx.weight_pde_error * pde
+                self.ctx.weight_pde_res * pde
                 + self.ctx.weight_reg * reg
                 + self.ctx.weight_misfit * misfit
             ),
@@ -269,7 +269,7 @@ class WeakPenaltySolver(BaseAirflowSolver):
         domain = self.ctx.domain
 
         nu = fem.Constant(domain, PETSc.ScalarType(self.ctx.viscosity))
-        w_pde = fem.Constant(domain, PETSc.ScalarType(self.ctx.weight_pde_error))
+        w_pde = fem.Constant(domain, PETSc.ScalarType(self.ctx.weight_pde_res))
         w_reg = fem.Constant(domain, PETSc.ScalarType(self.ctx.weight_reg))
 
         if reg_mode == "value":
@@ -358,12 +358,12 @@ class WeakPenaltySolver(BaseAirflowSolver):
             "reg_unweighted": reg,
             "boundary_unweighted": boundary,
             "misfit_unweighted": misfit,
-            "pde_weighted": self.ctx.weight_pde_error * pde,
+            "pde_weighted": self.ctx.weight_pde_res * pde,
             "reg_weighted": self.ctx.weight_reg * reg,
             "boundary_weighted": self.ctx.weight_boundary * boundary,
             "misfit_weighted": self.ctx.weight_misfit * misfit,
             "objective_total_weighted": (
-                self.ctx.weight_pde_error * pde
+                self.ctx.weight_pde_res * pde
                 + self.ctx.weight_reg * reg
                 + self.ctx.weight_boundary * boundary
                 + self.ctx.weight_misfit * misfit
@@ -462,7 +462,7 @@ class LinearLeastSquaresSolver(BaseAirflowSolver):
 
         return {
             "num_total_dofs": num_total_dofs,
-            "sqrt_w_pde": np.sqrt(self.ctx.weight_pde_error),
+            "sqrt_w_pde": np.sqrt(self.ctx.weight_pde_res),
             "reg_op": reg_op,
             "fixed_matrix": sps.vstack(fixed_blocks).tocsr(),
             "fixed_rhs": np.concatenate(fixed_rhs),
@@ -501,12 +501,12 @@ class LinearLeastSquaresSolver(BaseAirflowSolver):
             "reg_unweighted": reg,
             "boundary_unweighted": boundary,
             "misfit_unweighted": misfit,
-            "pde_weighted": self.ctx.weight_pde_error * pde,
+            "pde_weighted": self.ctx.weight_pde_res * pde,
             "reg_weighted": self.ctx.weight_reg * reg,
             "boundary_weighted": self.ctx.weight_boundary * boundary,
             "misfit_weighted": self.ctx.weight_misfit * misfit,
             "objective_total_weighted": (
-                self.ctx.weight_pde_error * pde
+                self.ctx.weight_pde_res * pde
                 + self.ctx.weight_reg * reg
                 + self.ctx.weight_boundary * boundary
                 + self.ctx.weight_misfit * misfit
