@@ -1,78 +1,9 @@
 import scipy
-import adios4dolfinx
-import dolfinx.io as dio
-import pyvista as pv
 import pandas as pd
 import numpy as np
 
 from dolfinx import fem
 from pathlib import Path
-from basix.ufl import element
-from mpi4py import MPI
-from dolfinx import plot
-
-from tools.visualizer import MatplotlibVisualizer2D
-
-
-def create_sample_points_with_wind_csv(
-    wind_csv: str | Path,
-    n_points: int,
-    seed: int,
-    z_height: float,
-    z_tol: float,
-    output_dir: str | Path | None = None,
-) -> Path:
-    """
-    Sample random points from 3D wind ground-truth CSV and save output CSV:
-    sample_id, x, y, z, wind_x, wind_y, wind_z.
-    """
-    if n_points <= 0:
-        raise ValueError("n_points must be > 0.")
-
-    wind_csv = Path(wind_csv).resolve()
-    if not wind_csv.exists():
-        raise FileNotFoundError(f"Wind CSV not found: {wind_csv}")
-
-    df = pd.read_csv(wind_csv)
-    required_cols = ["Points:0", "Points:1", "Points:2", "U:0", "U:1", "U:2"]
-    missing = [c for c in required_cols if c not in df.columns]
-    if missing:
-        raise ValueError(
-            f"Missing required columns in {wind_csv.name}: {missing}."
-        )
-
-    rows = df[required_cols].copy()
-    rows = rows[np.abs(rows["Points:2"].to_numpy() - z_height) <= z_tol]
-
-    if len(rows) < n_points:
-        raise ValueError(
-            f"Requested n_points={n_points}, but only {len(rows)} valid rows available."
-        )
-
-    rng = np.random.default_rng(seed)
-    sample_idx = rng.choice(len(rows), size=n_points, replace=False)
-    sampled = rows.iloc[sample_idx].reset_index(drop=True)
-
-    out = pd.DataFrame(
-        {
-            "sample_id": np.arange(n_points, dtype=np.int32),
-            "x": sampled["Points:0"].to_numpy(),
-            "y": sampled["Points:1"].to_numpy(),
-            "z": sampled["Points:2"].to_numpy(),
-            "wind_x": sampled["U:0"].to_numpy(),
-            "wind_y": sampled["U:1"].to_numpy(),
-            "wind_z": sampled["U:2"].to_numpy(),
-        }
-    )
-
-    if output_dir is None:
-        output_dir = wind_csv.parent
-    output_dir = Path(output_dir).resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    out_path = output_dir / f"sample_points_n{n_points}_seed{seed}.csv"
-    out.to_csv(out_path, index=False)
-    return out_path
 
 
 def read_sample_points_with_wind_csv(samples_csv: str | Path) -> tuple[np.ndarray, np.ndarray]:
@@ -261,56 +192,3 @@ def csv_to_function(
     arr[:, 0] = wind_vals[:, 0]
     arr[:, 1] = wind_vals[:, 1]
     dest.x.scatter_forward()
-
-
-def csv_layer_to_bp(
-    meshfile: str | Path,
-    wind_csv: str | Path,
-    output_bp: str | Path,
-    height: float,
-    z_tol: float,
-    deg_u: int = 2,
-    function_name: str = "velocity_H2",
-    meshtags_name: str = "facet_tags",
-    max_xy_dist: float | None = None,
-) -> Path:
-    """
-    Load a 2D wind slice from CSV onto a mesh and write it as an ADIOS BP checkpoint.
-
-    The CSV values are mapped to FEM nodes by nearest-neighbor lookup in XY.
-    """
-    meshfile = Path(meshfile).resolve(strict=True)
-    wind_csv = Path(wind_csv).resolve(strict=True)
-    output_bp = Path(output_bp).resolve()
-
-    domain, _, facet_tags = dio.gmshio.read_from_msh(meshfile, MPI.COMM_WORLD, gdim=2)
-    elem_u = element("Lagrange", domain.basix_cell(), deg_u, shape=(domain.geometry.dim,))
-    V = fem.functionspace(domain, elem_u)
-
-    velocity = fem.Function(V)
-    csv_to_function(
-        wind_csv=wind_csv,
-        height=height,
-        z_tol=z_tol,
-        dest=velocity,
-        max_xy_dist=max_xy_dist,
-    )
-
-    adios4dolfinx.write_mesh(output_bp, domain)
-    adios4dolfinx.write_meshtags(output_bp, domain, facet_tags, meshtag_name=meshtags_name)
-    adios4dolfinx.write_function(output_bp, velocity, name=function_name)
-    return output_bp
-
-
-if __name__ == "__main__":
-
-    csv_layer_to_bp(
-        meshfile=Path("/app/exp_sample_based_estimation/exp_wind_comparison/10x6_mesh/mesh.msh"),
-        wind_csv=Path("/app/csv_wind_data/10x6_central_obstacle/wind_solution.csv"),
-        output_bp=Path("/app/exp_sample_based_estimation/exp_wind_comparison/airflow_10x6_ground_truth_coarse.bp"),
-        height=1.0,
-        z_tol=0.3,
-        deg_u=2,
-        function_name="velocity_H2",
-        meshtags_name="facet_tags",
-    )
