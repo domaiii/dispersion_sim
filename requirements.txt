@@ -4,4 +4,5 @@ pygmsh
 scipy
 pyvista
 adios4dolfinx
+opencv-python
 imageio>=2.31,<3
