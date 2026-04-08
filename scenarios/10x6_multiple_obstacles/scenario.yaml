@@ -1,0 +1,16 @@
+name: 10x6_multiple_obstacles
+
+geometry:
+  mesh: geometry/multiple_obstacles_rect_2d.msh
+  occupancy_yaml: geometry/occupancy.yaml
+  occupancy_image: geometry/occupancy.pgm
+
+truth:
+  wind_csv: wind_gt.csv
+
+data:
+  sample_dir: samples
+  result_dir: results
+
+meta:
+  description: 10x6 m room with multiple in- and outlets and tree rectangular obstacles.

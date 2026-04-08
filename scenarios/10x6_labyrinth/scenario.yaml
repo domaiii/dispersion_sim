@@ -1,0 +1,16 @@
+name: 10x6_labyrinth
+
+geometry:
+  mesh: geometry/labyrinth_2d.msh
+  occupancy_yaml: geometry/occupancy.yaml
+  occupancy_image: geometry/occupancy.pgm
+
+truth:
+  wind_csv: wind_gt.csv
+
+data:
+  sample_dir: samples
+  result_dir: results
+
+meta:
+  description: 10x6 room with labyrinth profile

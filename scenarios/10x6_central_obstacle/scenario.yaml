@@ -1,0 +1,16 @@
+name: 10x6_central_obstacle
+
+geometry:
+  mesh: geometry/central_obstacle_2d.msh
+  occupancy_yaml: geometry/occupancy.yaml
+  occupancy_image: geometry/occupancy.pgm
+
+truth:
+  wind_csv: wind_gt.csv
+
+data:
+  sample_dir: samples
+  result_dir: results
+
+meta:
+  description: Symmetric 10x6 m room with a central obstacle and two doors
