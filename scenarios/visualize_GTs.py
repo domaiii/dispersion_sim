@@ -5,8 +5,8 @@ from basix.ufl import element
 from dolfinx import fem
 from mpi4py import MPI
 
-from tools.csv_utilities import load_from_3Dcsv
-from tools.visualizer import MatplotlibVisualizer2D
+from tools.csv_utilities import csv_to_function
+from tools.visualizer import Visualizer
 
 SLICE_HEIGHT = 0.025
 Z_TOL = 1e-1
@@ -39,9 +39,9 @@ def plot_case(title: str, msh_path: Path, csv_path: Path, output_path: Path) -> 
     V = fem.functionspace(domain, elem_u)
 
     velocity = fem.Function(V)
-    load_from_3Dcsv(csv_path, SLICE_HEIGHT, Z_TOL, velocity)
+    csv_to_function(csv_path, SLICE_HEIGHT, Z_TOL, velocity)
 
-    vis = MatplotlibVisualizer2D(V)
+    vis = Visualizer(V)
     #vis.add_background_mesh(color='0.82', linewidth=0.22, alpha=0.7)
     vis.add_vector_field(title, velocity, stride=1, cmap='coolwarm')
     vis.add_boundary_facets(facet_tags, tag_styles=CASE_STYLES.get(title, {}))

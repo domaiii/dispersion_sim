@@ -270,9 +270,9 @@ def run_ipcs(cfg: IPCSConfig) -> IPCSResult:
 
 
 def plot_streamlines(result: IPCSResult, nx: int = 100, ny: int = 50, density: float = 1.6):
-    from tools.visualizer import MatplotlibVisualizer2D
+    from tools.visualizer import Visualizer
 
-    vis = MatplotlibVisualizer2D(result.velocity.function_space)
+    vis = Visualizer(result.velocity.function_space)
     vis.add_background_mesh()
     vis.add_streamplot("Result IPCS", result.velocity, nx, ny, density)
     vis.show("IPCS Forward Simulation")

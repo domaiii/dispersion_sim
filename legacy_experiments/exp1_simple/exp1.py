@@ -5,7 +5,7 @@ import pandas as pd
 from dolfinx import fem
 from tools.airflow_estimator import AirflowEstimator
 from tools.gas_estimator import GasSourceEstimator
-from tools.visualizer import Visualizer2D
+from tools.visualizer import Visualizer
 from tools.experiment import SingleExperiment, SingleExperimentResult, ErrorValue
 
 # -------------------------------------------------------------
@@ -57,7 +57,7 @@ source_locations = [(0.1 * gas_new.Lx, 0.3 * gas_new.Ly),
                     (0.5 * gas_new.Lx, 0.75 * gas_new.Ly)]
 
 # Visual sanity check
-vis = Visualizer2D(gas_new.scalar_space)
+vis = Visualizer(gas_new.scalar_space)
 vis.add_background_mesh()
 vis.add_points(source_locations, color="red", size=16)
 vis.show("Candidate Source Locations")

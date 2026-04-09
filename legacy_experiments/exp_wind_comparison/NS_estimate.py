@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from dolfinx import fem
 from pathlib import Path
 from tools.airflow_estimator import AirflowEstimator
-from tools.visualizer import MatplotlibVisualizer2D
+from tools.visualizer import Visualizer
 
 
 def velocity_rmse(u_true: fem.Function, u_est: fem.Function) -> float:

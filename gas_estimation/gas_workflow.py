@@ -4,7 +4,7 @@ from pathlib import Path
 from dolfinx import mesh, fem, io
 from mpi4py import MPI
 from basix.ufl import element
-from tools.visualizer import Visualizer2D
+from tools.visualizer import Visualizer
 from tools.gas_estimator import GasSourceEstimator
 
 wind_file = Path("/app/wind_data/airflow_ipcs.bp")
@@ -33,7 +33,7 @@ gas_est.reset_random_measurements(100, seed=5)
 gas_est.solve_L1(gamma_reg=0.001)
 
 
-vis = Visualizer2D(gas_est.scalar_space, font_size=30)
+vis = Visualizer(gas_est.scalar_space)
 
 vis.add_scalar_field("source_estimate", gas_est.source_est)
 

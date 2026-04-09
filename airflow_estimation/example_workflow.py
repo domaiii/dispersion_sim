@@ -7,7 +7,7 @@ from mpi4py import MPI
 from dolfinx import fem
 from pathlib import Path
 from tools.airflow_estimator import AirflowEstimator
-from tools.visualizer import Visualizer2D
+from tools.visualizer import Visualizer
 
 # Example usage 
 bpfile   = Path("/home/dominik/git/dispersion_sim/wind_data/airflow_picard.bp")
@@ -55,16 +55,16 @@ result = est.solve_minimum_residual(maxit=3)
 
 m_coords = est.get_measurement_coordinates()
 
-vis = Visualizer2D(V, window_size=(3200, 1800), font_size=40)
+vis = Visualizer(V, figsize=(16, 9), dpi=180)
 vis.add_background_mesh()
-vis.add_vector_field("Measurements from ground truth", est.ground_truth.sub(0).collapse(), factor=1.0)
+vis.add_vector_field("Measurements from ground truth", est.ground_truth.sub(0).collapse(), scale=1.0)
 vis.add_points(m_coords, "red", size=30, label="Measurements")
-vis.show(zoom=1.4)
+vis.show()
 
-vis = Visualizer2D(V, window_size=(3200, 1800), font_size=40)
+vis = Visualizer(V, figsize=(16, 9), dpi=180)
 vis.add_background_mesh()
-vis.add_vector_field("Airflow Estimation", result.sub(0).collapse(), factor=1.0)
-vis.show(zoom=1.4)
+vis.add_vector_field("Airflow Estimation", result.sub(0).collapse(), scale=1.0)
+vis.show()
 
 # --- Vergleiche: geschätztes vs. wahres Strömungsfeld ---
 u_true = est.ground_truth.sub(0).collapse()
@@ -99,12 +99,12 @@ vel_field = fem.Function(V_scalar)
 ang_field.x.array[:] = ang_diff
 vel_field.x.array[:] = vel_diff
 
-vis_Scalar = Visualizer2D(V_scalar, window_size=(3200,1800), font_size=50)
+vis_Scalar = Visualizer(V_scalar, figsize=(16, 9), dpi=180)
 vis_Scalar.add_background_mesh()
 vis_Scalar.add_scalar_field("Angluar error in °", ang_field)
-vis_Scalar.show(zoom=1.4)
+vis_Scalar.show()
 
-vis_Scalar2 = Visualizer2D(V_scalar, window_size=(3200,1800), font_size=50)
+vis_Scalar2 = Visualizer(V_scalar, figsize=(16, 9), dpi=180)
 vis_Scalar2.add_background_mesh()
 vis_Scalar2.add_scalar_field("Velocity error in m/s", vel_field)
-vis_Scalar2.show(zoom=1.4)
+vis_Scalar2.show()
