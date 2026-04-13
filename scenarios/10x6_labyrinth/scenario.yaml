@@ -1,16 +1,40 @@
 name: 10x6_labyrinth
-
 geometry:
   mesh: geometry/labyrinth_2d.msh
   occupancy_yaml: geometry/occupancy.yaml
   occupancy_image: geometry/occupancy.pgm
-
-truth:
-  wind_csv: wind_gt.csv
-
+  wall_pattern: wall|obstacle
+  outflow_pattern: outlet|outflow
 data:
+  wind_csv: wind_gt.csv
   sample_dir: samples
   result_dir: results
-
+ground_truth_slicing:
+  z_height: 0.025
+  z_tol: 0.025
+  max_xy_dist: 0.2
+ns_solver_parameters:
+  solver: minimum_residual
+  regularization: smooth
+  maxit: 25
+  tol: 0.01
+  damping: null
+  viscosity: 1.0e-05
+  weight_misfit: 100.0
+  weight_pde_res: 1.0
+  weight_reg: 0.01
+  weight_boundary: 10000.0
+gmrf_parameters:
+  cell_size: 0.25
+  var_speed: 0.01
+  var_direction: 0.01
+  batch_size: 25
 meta:
   description: 10x6 room with labyrinth profile
+wind_sample_sizes:
+- 10  
+- 25
+- 50
+- 100
+- 200
+- 400

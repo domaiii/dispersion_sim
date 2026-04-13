@@ -50,6 +50,7 @@ class GmrfClient(Node):
         self._est_client = self.create_client(WindEstimation, estimation_service)
 
     def wait_for_services(self, timeout_sec: float = WAIT_SERVICE_SEC) -> bool:
+        self.get_logger().info("Waiting for services...")
         ok_add = self._add_client.wait_for_service(timeout_sec=timeout_sec)
         ok_clear = self._clear_client.wait_for_service(timeout_sec=timeout_sec)
         ok_est = self._est_client.wait_for_service(timeout_sec=timeout_sec)
