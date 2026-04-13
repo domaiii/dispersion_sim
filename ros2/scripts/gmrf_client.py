@@ -164,6 +164,8 @@ def save_estimation_csv(
         raise ValueError("Invalid map size in WindEstimation response")
     map_yaml_file = Path(map_yaml_file)
     free_mask, map_resolution, origin_x, origin_y = load_free_space_mask(map_yaml_file)
+    gmrf_origin_x = cell_size * round(origin_x / cell_size)
+    gmrf_origin_y = cell_size * round(origin_y / cell_size)
     height, width = free_mask.shape
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -173,8 +175,8 @@ def save_estimation_csv(
         for idx in range(n):
             grid_x = idx % res.map_width
             grid_y = idx // res.map_width
-            x = origin_x + (grid_x + 0.5) * cell_size
-            y = origin_y + (grid_y + 0.5) * cell_size
+            x = gmrf_origin_x + (grid_x + 0.5) * cell_size
+            y = gmrf_origin_y + (grid_y + 0.5) * cell_size
             x_idx = int((x - origin_x) / map_resolution)
             y_idx = int((y - origin_y) / map_resolution)
             if x_idx < 0 or x_idx >= width or y_idx < 0 or y_idx >= height:
@@ -204,13 +206,44 @@ def save_estimation_png(
     speed = np.hypot(u_arr, v_arr)
     yy, xx = np.mgrid[0:map_height, 0:res.map_width]
 
+    if cell_size is not None and map_yaml_file is not None:
+        free_mask, map_resolution, origin_x, origin_y = load_free_space_mask(Path(map_yaml_file))
+        gmrf_origin_x = cell_size * round(origin_x / cell_size)
+        gmrf_origin_y = cell_size * round(origin_y / cell_size)
+        x_plot = gmrf_origin_x + (xx + 0.5) * cell_size
+        y_plot = gmrf_origin_y + (yy + 0.5) * cell_size
+    else:
+        free_mask = None
+        map_resolution = None
+        origin_x = 0.0
+        origin_y = 0.0
+        x_plot = xx
+        y_plot = yy
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(10, 5), dpi=160)
 
+    if free_mask is not None and map_resolution is not None:
+        occupied_image = np.zeros((*free_mask.shape, 4), dtype=float)
+        occupied_image[np.flipud(~free_mask)] = (0.45, 0.45, 0.45, 0.25)
+        occ_height, occ_width = free_mask.shape
+        ax.imshow(
+            occupied_image,
+            origin="lower",
+            extent=(
+                origin_x,
+                origin_x + occ_width * map_resolution,
+                origin_y,
+                origin_y + occ_height * map_resolution,
+            ),
+            interpolation="nearest",
+            zorder=0,
+        )
+
     if streamplot:
         stream = ax.streamplot(
-            np.arange(res.map_width),
-            np.arange(map_height),
+            x_plot[0, :],
+            y_plot[:, 0],
             u_arr,
             v_arr,
             color=speed,
@@ -222,8 +255,8 @@ def save_estimation_png(
         mappable = stream.lines
     else:
         mappable = ax.quiver(
-            xx[::plot_step, ::plot_step],
-            yy[::plot_step, ::plot_step],
+            x_plot[::plot_step, ::plot_step],
+            y_plot[::plot_step, ::plot_step],
             u_arr[::plot_step, ::plot_step],
             v_arr[::plot_step, ::plot_step],
             speed[::plot_step, ::plot_step],
@@ -233,17 +266,19 @@ def save_estimation_png(
             scale=None,
             width=0.0022,
             pivot="mid",
+            zorder=2,
         )
 
     cbar = fig.colorbar(mappable, ax=ax, pad=0.02)
     cbar.set_label("Magnitude")
 
     if observations:
-        if cell_size is None or map_yaml_file is None:
-            raise ValueError("cell_size and map_yaml_file are required when plotting observations.")
-        _, _, origin_x, origin_y = load_free_space_mask(Path(map_yaml_file))
-        obs_x = [((obs.x - origin_x) / cell_size) - 0.5 for obs in observations]
-        obs_y = [((obs.y - origin_y) / cell_size) - 0.5 for obs in observations]
+        if cell_size is not None and map_yaml_file is not None:
+            obs_x = [obs.x for obs in observations]
+            obs_y = [obs.y for obs in observations]
+        else:
+            obs_x = [obs.x for obs in observations]
+            obs_y = [obs.y for obs in observations]
         ax.scatter(
             obs_x,
             obs_y,
@@ -259,8 +294,8 @@ def save_estimation_png(
         ax.legend(loc="upper right")
 
     ax.set_aspect("equal", adjustable="box")
-    ax.set_xlabel("x")
-    ax.set_ylabel("y")
+    ax.set_xlabel("x [m]" if cell_size is not None and map_yaml_file is not None else "x")
+    ax.set_ylabel("y [m]" if cell_size is not None and map_yaml_file is not None else "y")
     ax.set_title(f"GMRF Wind Estimation based on {used_samples} samples")
     fig.tight_layout()
     fig.savefig(output_path)
