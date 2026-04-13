@@ -1,4 +1,5 @@
 import os
+import argparse
 import numpy as np
 import pyvista as pv
 import matplotlib.pyplot as plt
@@ -250,85 +251,222 @@ class Visualizer:
         else:
             plt.show()
 
+    
+    ### csv plotting ###
+    
+    @staticmethod
+    def plot_wind_slice_csv(
+        csv_path: str | Path,
+        z_height: float,
+        z_tol: float = 0.05,
+        output_path: str | Path | None = None,
+        title: str | None = None,
+        stride: int = 1,
+        figsize: tuple[float, float] = (10, 5),
+        dpi: int = 160,
+        cmap: str = "coolwarm",
+        scale: float | None = None,
+        width: float = 0.0022,
+        colorbar_label: str = "wind speed (m/s)",
+        show: bool = True,
+    ):
+        csv_path = Path(csv_path).resolve()
+        df = pd.read_csv(csv_path)
+        gt_cols = ["Points:0", "Points:1", "Points:2", "U:0", "U:1"]
 
-def _load_wind_csv_columns(csv_path: str | Path) -> pd.DataFrame:
-    csv_path = Path(csv_path).resolve()
-    df = pd.read_csv(csv_path)
+        if not all(col in df.columns for col in gt_cols):
+            raise ValueError(
+                f"Unsupported 3D wind CSV format in {csv_path.name}. "
+                "Expected columns Points:0,Points:1,Points:2,U:0,U:1."
+            )
 
-    simple_cols = ["x", "y", "wind_x", "wind_y"]
-    gt_cols = ["Points:0", "Points:1", "U:0", "U:1"]
+        mask = np.abs(df["Points:2"].to_numpy(dtype=float) - float(z_height)) <= float(z_tol)
+        df = df.loc[mask, gt_cols].copy()
+        if df.empty:
+            raise ValueError(
+                f"No CSV rows found in slice z={z_height:.6g} +/- {z_tol:.6g} for {csv_path.name}."
+            )
 
-    if all(col in df.columns for col in simple_cols):
-        return df[simple_cols].copy()
+        df.columns = ["x", "y", "z", "wind_x", "wind_y"]
+        stride = max(int(stride), 1)
+        df = df.iloc[::stride].copy()
 
-    if all(col in df.columns for col in gt_cols):
-        out = df[gt_cols].copy()
-        out.columns = simple_cols
-        return out
+        x = df["x"].to_numpy(dtype=float)
+        y = df["y"].to_numpy(dtype=float)
+        u = df["wind_x"].to_numpy(dtype=float)
+        v = df["wind_y"].to_numpy(dtype=float)
+        speed = np.sqrt(u * u + v * v)
 
-    raise ValueError(
-        f"Unsupported wind CSV format in {csv_path.name}. "
-        "Expected either columns x,y,wind_x,wind_y or Points:0,Points:1,U:0,U:1."
-    )
+        fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+        quiv = ax.quiver(x, y, u, v, speed,
+            cmap=cmap,
+            angles="xy",
+            scale_units="xy",
+            scale=scale,
+            width=width,
+            pivot="tail",
+        )
+        ax.set_aspect("equal", adjustable="box")
+        ax.set_xlabel("x (m)")
+        ax.set_ylabel("y (m)")
 
-def plot_wind_csv(
-    csv_path: str | Path,
-    output_path: str | Path | None = None,
-    title: str | None = None,
-    stride: int = 1,
-    figsize: tuple[float, float] = (10, 5),
-    dpi: int = 160,
-    cmap: str = "coolwarm",
-    scale: float | None = None,
-    width: float = 0.0022,
-    colorbar_label: str = "speed",
-    show: bool = True,
-):
-    df = _load_wind_csv_columns(csv_path)
-    stride = max(int(stride), 1)
-    df = df.iloc[::stride].copy()
+        if title is not None:
+            ax.set_title(title)
 
-    x = df["x"].to_numpy(dtype=float)
-    y = df["y"].to_numpy(dtype=float)
-    u = df["wind_x"].to_numpy(dtype=float)
-    v = df["wind_y"].to_numpy(dtype=float)
-    speed = np.sqrt(u * u + v * v)
+        cbar = fig.colorbar(quiv, ax=ax, pad=0.02)
+        if colorbar_label is not None:
+            cbar.set_label(colorbar_label)
 
-    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
-    quiv = ax.quiver(
-        x,
-        y,
-        u,
-        v,
-        speed,
-        cmap=cmap,
-        angles="xy",
-        scale_units="xy",
-        scale=scale,
-        width=width,
-        pivot="tail",
-    )
-    ax.set_aspect("equal", adjustable="box")
-    ax.set_xlabel("x")
-    ax.set_ylabel("y")
+        fig.tight_layout()
 
-    if title is not None:
-        ax.set_title(title)
+        if output_path is not None:
+            output_path = Path(output_path)
+            fig.savefig(output_path, dpi=dpi)
+            print(f"[plot_wind_csv_slice] Saved figure: {output_path}")
 
-    cbar = fig.colorbar(quiv, ax=ax, pad=0.02)
-    if colorbar_label is not None:
-        cbar.set_label(colorbar_label)
+        if show:
+            plt.show()
+        else:
+            plt.close(fig)
 
-    fig.tight_layout()
+        return fig, ax
 
-    if output_path is not None:
-        output_path = Path(output_path)
-        fig.savefig(output_path, dpi=dpi)
-        print(f"[plot_wind_csv] Saved figure: {output_path}")
+    @staticmethod
+    def plot_wind_2Dcsv(
+        csv_path: str | Path,
+        output_path: str | Path | None = None,
+        title: str | None = None,
+        stride: int = 1,
+        figsize: tuple[float, float] = (10, 5),
+        dpi: int = 160,
+        cmap: str = "coolwarm",
+        scale: float | None = None,
+        width: float = 0.0022,
+        colorbar_label: str = "speed",
+        show: bool = True,
+    ):
+        csv_path = Path(csv_path).resolve()
+        df = pd.read_csv(csv_path)
 
-    if show:
-        plt.show()
+        simple_cols = ["x", "y", "wind_x", "wind_y"]
+        gt_cols = ["Points:0", "Points:1", "U:0", "U:1"]
+
+        if all(col in df.columns for col in simple_cols):
+            df = df[simple_cols].copy()
+        elif all(col in df.columns for col in gt_cols):
+            df = df[gt_cols].copy()
+            df.columns = simple_cols
+        else:
+            raise ValueError(
+                f"Unsupported wind CSV format in {csv_path.name}. "
+                "Expected either columns x,y,wind_x,wind_y or Points:0,Points:1,U:0,U:1."
+            )
+        stride = max(int(stride), 1)
+        df = df.iloc[::stride].copy()
+
+        x = df["x"].to_numpy(dtype=float)
+        y = df["y"].to_numpy(dtype=float)
+        u = df["wind_x"].to_numpy(dtype=float)
+        v = df["wind_y"].to_numpy(dtype=float)
+        speed = np.sqrt(u * u + v * v)
+
+        fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+        quiv = ax.quiver(x, y, u, v, speed,
+            cmap=cmap,
+            angles="xy",
+            scale_units="xy",
+            scale=scale,
+            width=width,
+            pivot="tail",
+        )
+        ax.set_aspect("equal", adjustable="box")
+        ax.set_xlabel("x (m)")
+        ax.set_ylabel("y (m)")
+
+        if title is not None:
+            ax.set_title(title)
+
+        cbar = fig.colorbar(quiv, ax=ax, pad=0.02)
+        if colorbar_label is not None:
+            cbar.set_label(colorbar_label)
+
+        fig.tight_layout()
+
+        if output_path is not None:
+            output_path = Path(output_path)
+            fig.savefig(output_path, dpi=dpi)
+            print(f"[plot_wind_csv] Saved figure: {output_path}")
+
+        if show:
+            plt.show()
+        else:
+            plt.close(fig)
+
+        return fig, ax
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Visualize wind CSV files and save them as PNG plots.")
+    parser.add_argument("windfile_csv", type=str, help="Path to the wind CSV file.")
+    parser.add_argument("-o", "--output-dir", type=str, default=None, help="Optional output directory for the PNG. Defaults to the input file's parent directory.")
+    parser.add_argument("--title", type=str, default=None, help="Optional plot title.")
+    parser.add_argument("--stride", type=int, default=1, help="Plot every n-th row to reduce clutter.")
+    parser.add_argument("--scale", type=float, default=None, help="Optional matplotlib quiver scale.")
+    parser.add_argument("--width", type=float, default=0.0022, help="Arrow width for quiver plots.")
+    parser.add_argument("--dpi", type=int, default=160, help="Figure DPI.")
+    parser.add_argument("--figsize", type=float, nargs=2, metavar=("W", "H"), default=(10, 5), help="Figure size in inches.")
+    parser.add_argument("--cmap", type=str, default="coolwarm", help="Matplotlib colormap.")
+    parser.add_argument("--show", action="store_true", help="Also show the figure interactively.")
+    parser.add_argument("--z-height", type=float, default=None, help="Slice center height for 3D CSV files.")
+    parser.add_argument("--z-tol", type=float, default=0.05, help="Half-thickness of the z slice, e.g. 0.05 means +/- 5 cm.")
+    parser.add_argument("--z-span-threshold", type=float, default=0.2, help="If the z-span exceeds this threshold, the CSV is treated as 3D.")
+    args = parser.parse_args()
+
+    csv_path = Path(args.windfile_csv).resolve()
+    if csv_path.suffix.lower() != ".csv":
+        raise ValueError("Can only visualize .csv files.")
+
+    output_dir = csv_path.parent if args.output_dir is None else Path(args.output_dir).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    df_head = pd.read_csv(csv_path, nrows=1)
+    if "Points:2" in df_head.columns:
+        z = pd.read_csv(csv_path, usecols=["Points:2"])["Points:2"].to_numpy(dtype=float)
+        is_3d = z.size > 0 and float(np.max(z) - np.min(z)) > float(args.z_span_threshold)
     else:
-        plt.close(fig)
+        is_3d = False
+    if is_3d:
+        if args.z_height is None:
+            raise ValueError(
+                f"{csv_path.name} is treated as a 3D CSV because its z-span exceeds {args.z_span_threshold:.3g} m. "
+                "Pass --z-height to choose the slice to plot."
+            )
+        output_path = output_dir / f"{csv_path.stem}_z{args.z_height:g}.png"
+        Visualizer.plot_wind_slice_csv(
+            csv_path,
+            z_height=args.z_height,
+            z_tol=args.z_tol,
+            output_path=output_path,
+            title=args.title,
+            stride=args.stride,
+            figsize=tuple(args.figsize),
+            dpi=args.dpi,
+            cmap=args.cmap,
+            scale=args.scale,
+            width=args.width,
+            show=args.show,
+        )
+    else:
+        output_path = output_dir / f"{csv_path.stem}.png"
+        Visualizer.plot_wind_2Dcsv(
+            csv_path,
+            output_path=output_path,
+            title=args.title,
+            stride=args.stride,
+            figsize=tuple(args.figsize),
+            dpi=args.dpi,
+            cmap=args.cmap,
+            scale=args.scale,
+            width=args.width,
+            show=args.show,
+        )
 
-    return fig, ax
