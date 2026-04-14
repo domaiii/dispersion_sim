@@ -35,6 +35,13 @@ class BaseAirflowSolver(ABC):
 
     def __init__(self, ctx: AirflowSolverConfig):
         self.ctx = ctx
+        self.last_status = {
+            "converged": False,
+            "iterations": 0,
+            "max_iterations": 0,
+            "tolerance": float("nan"),
+            "final_relative_change": float("nan"),
+        }
 
     def solve(self,
               maxit: int,
@@ -50,19 +57,34 @@ class BaseAirflowSolver(ABC):
         self._validate()
         context = self._prepare_solve(reg_mode)
 
+        iterations = 0
+        converged = False
+        final_diff = float("nan")
+
         for k in range(maxit):
             self._solve_step(wh_prev, wh, reg_mode, context)
 
             diff = np.linalg.norm(wh.x.array - wh_prev.x.array) / (np.linalg.norm(wh.x.array) + 1e-10)
+            iterations = k + 1
+            final_diff = float(diff)
             if verbose:
                 self._report_iteration(k, diff, wh, reg_mode, context)
             if diff < tol:
+                converged = True
                 break
 
             if damping is not None and 0.0 < damping < 1.0:
                 wh_prev.x.array[:] = (1 - damping) * wh_prev.x.array + damping * wh.x.array
             else:
                 wh_prev.x.array[:] = wh.x.array
+
+        self.last_status = {
+            "converged": converged,
+            "iterations": iterations,
+            "max_iterations": int(maxit),
+            "tolerance": float(tol),
+            "final_relative_change": final_diff,
+        }
 
         if verbose:
             self._report_summary(wh, reg_mode, context)

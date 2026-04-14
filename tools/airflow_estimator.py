@@ -389,13 +389,15 @@ class AirflowEstimator:
                                damping: float | None = None,
                                regularization: str | None = None,
                                verbose: bool = False):
-        result = MinimumResidualSolver(self._build_solver_context()).solve(
+        solver = MinimumResidualSolver(self._build_solver_context())
+        result = solver.solve(
             maxit=maxit,
             tol=tol,
             damping=damping,
             regularization=regularization,
             verbose=verbose,
         )
+        self.last_solver_status = solver.last_status
         self.w_final = result
         return result
 
@@ -405,13 +407,15 @@ class AirflowEstimator:
                            damping: float | None = None,
                            regularization: str | None = None,
                            verbose: bool = False):
-        result = WeakPenaltySolver(self._build_solver_context()).solve(
+        solver = WeakPenaltySolver(self._build_solver_context())
+        result = solver.solve(
             maxit=maxit,
             tol=tol,
             damping=damping,
             regularization=regularization,
             verbose=verbose,
         )
+        self.last_solver_status = solver.last_status
         self.w_final = result
         return result
 
@@ -420,12 +424,14 @@ class AirflowEstimator:
                                    tol: float = 1e-3,
                                    regularization: str | None = None,
                                    verbose: bool = False):
-        result = LinearLeastSquaresSolver(self._build_solver_context()).solve(
+        solver = LinearLeastSquaresSolver(self._build_solver_context())
+        result = solver.solve(
             maxit=maxit,
             tol=tol,
             regularization=regularization,
             verbose=verbose,
         )
+        self.last_solver_status = solver.last_status
         self.w_final = result
         return result
 

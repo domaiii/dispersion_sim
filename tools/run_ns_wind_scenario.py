@@ -1,152 +1,41 @@
 import argparse
+from contextlib import contextmanager
 import json
+import os
 import re
-from dataclasses import dataclass, field
+import time
 from pathlib import Path
 
 import numpy as np
-import yaml
 from basix.ufl import element
 from dolfinx import fem
 import dolfinx.io as dio
 from mpi4py import MPI
-from ufl import dx, inner
-
 from airflow_estimator import AirflowEstimator
 from csv_utilities import csv_to_function
-
-SINGLE_LAYER_Z_SPAN = 0.1
-
+from scenario import ScenarioConfig, infer_z_height
 
 
-@dataclass(frozen=True)
-class NsScenarioConfig:
-    name: str
-    root: Path
-    mesh: Path
-    wind_csv: Path
-    samples_dir: Path
-    results_dir: Path
-    z_height: float | None = None
-    z_tol: float = 0.05
-    max_xy_dist: float = 0.2
-    wind_sample_sizes: list[int] = field(default_factory=list)
-    wall_pattern: str = r"wall|obstacle"
-    outflow_pattern: str = r"outlet|outflow"
-    solver: str = "minimum_residual"
-    regularization: str = "smooth"
-    maxit: int = 25
-    tol: float = 1e-2
-    damping: float | None = None
-    viscosity: float = 1e-5
-    weight_misfit: float = 1e2
-    weight_pde_res: float = 1.0
-    weight_reg: float = 1e-2
-    weight_boundary: float = 1e4
+@contextmanager
+def suppress_native_output():
+    stdout_fd = os.dup(1)
+    stderr_fd = os.dup(2)
+    try:
+        with open(os.devnull, "w", encoding="utf-8") as devnull:
+            os.dup2(devnull.fileno(), 1)
+            os.dup2(devnull.fileno(), 2)
+            yield
+    finally:
+        os.dup2(stdout_fd, 1)
+        os.dup2(stderr_fd, 2)
+        os.close(stdout_fd)
+        os.close(stderr_fd)
 
-
-def load_scenario(path: str | Path) -> NsScenarioConfig:
-    scenario_path = Path(path).resolve()
-    if scenario_path.is_dir():
-        scenario_path = scenario_path / "scenario.yaml"
-
-    with scenario_path.open("r") as f:
-        raw = yaml.safe_load(f)
-
-    root = scenario_path.parent
-    geometry = raw.get("geometry", {})
-    data = raw.get("data", {})
-    slicing = raw.get("ground_truth_slicing", {})
-    solver = raw.get("ns_solver_parameters", {})
-    damping = solver.get("damping", NsScenarioConfig.damping)
-    
-    return NsScenarioConfig(
-        name=str(raw["name"]),
-        root=root,
-        mesh=(root / geometry["mesh"]).resolve(),
-        wind_csv=(root / data["wind_csv"]).resolve(),
-        samples_dir=(root / data["sample_dir"]).resolve(),
-        results_dir=(root / data["result_dir"]).resolve(),
-        z_height=None if slicing.get("z_height") is None else float(slicing["z_height"]),
-        z_tol=float(slicing.get("z_tol", NsScenarioConfig.z_tol)),
-        max_xy_dist=float(slicing.get("max_xy_dist", NsScenarioConfig.max_xy_dist)),
-        wind_sample_sizes=raw.get("wind_sample_sizes", {}),
-        wall_pattern=str(geometry.get("wall_pattern", NsScenarioConfig.wall_pattern)),
-        outflow_pattern=str(geometry.get("outflow_pattern", NsScenarioConfig.outflow_pattern)),
-        solver=str(solver.get("solver", NsScenarioConfig.solver)),
-        regularization=str(solver.get("regularization", NsScenarioConfig.regularization)),
-        maxit=int(solver.get("maxit", NsScenarioConfig.maxit)),
-        tol=float(solver.get("tol", NsScenarioConfig.tol)),
-        damping=None if damping is None else float(damping),
-        viscosity=float(solver.get("viscosity", NsScenarioConfig.viscosity)),
-        weight_misfit=float(solver.get("weight_misfit", NsScenarioConfig.weight_misfit)),
-        weight_pde_res=float(solver.get("weight_pde_res", NsScenarioConfig.weight_pde_res)),
-        weight_reg=float(solver.get("weight_reg", NsScenarioConfig.weight_reg)),
-        weight_boundary=float(solver.get("weight_boundary", NsScenarioConfig.weight_boundary)),
-    )
-
-
-def infer_z_height(wind_csv: Path, z_height: float | None) -> float:
-    import pandas as pd
-
-    df = pd.read_csv(wind_csv, usecols=["Points:2"])
-    z = df["Points:2"].to_numpy(dtype=float)
-    z_min = float(np.min(z))
-    z_max = float(np.max(z))
-
-    if z_height is not None:
-        return z_height
-    if z_max - z_min <= SINGLE_LAYER_Z_SPAN:
-        return 0.5 * (z_min + z_max)
-    raise ValueError(
-        "Ground-truth CSV contains multiple z-levels. Pass a z_height in the scenario config. "
-        f"Observed z-range is [{z_min:.6g}, {z_max:.6g}]."
-    )
 
 
 def match_boundary_names(name_to_id: dict[str, int], pattern: str) -> list[str]:
     regex = re.compile(pattern, re.IGNORECASE)
     return [name for name in name_to_id if regex.search(name)]
-
-def l2_norm(expr, domain) -> float:
-    local_value = fem.assemble_scalar(fem.form(inner(expr, expr) * dx))
-    global_value = domain.comm.allreduce(local_value, op=MPI.SUM)
-    return float(np.sqrt(global_value))
-
-def domain_area(domain) -> float:
-    local_value = fem.assemble_scalar(fem.form(1.0 * dx(domain=domain)))
-    return float(domain.comm.allreduce(local_value, op=MPI.SUM))
-
-def velocity_rmse(u_true: fem.Function, u_est: fem.Function) -> float:
-    abs_err = l2_norm(u_est - u_true, u_true.function_space.mesh)
-    area = domain_area(u_true.function_space.mesh)
-    return abs_err / np.sqrt(area) if area > 1e-14 else 0.0
-
-def directional_rmse(u_true: fem.Function, u_est: fem.Function, eps: float = 1e-12) -> float:
-    true_arr = u_true.x.array.reshape(-1, u_true.function_space.dofmap.bs)
-    est_arr = u_est.x.array.reshape(-1, u_est.function_space.dofmap.bs)
-    true_norm = np.linalg.norm(true_arr, axis=1)
-    est_norm = np.linalg.norm(est_arr, axis=1)
-    mask = (true_norm > eps) & (est_norm > eps)
-    if not np.any(mask):
-        return 0.0
-    true_dir = true_arr[mask] / true_norm[mask, None]
-    est_dir = est_arr[mask] / est_norm[mask, None]
-    diff = est_dir - true_dir
-    return float(np.sqrt(np.mean(np.sum(diff * diff, axis=1))))
-
-def angular_rmse_deg(u_true: fem.Function, u_est: fem.Function, eps: float = 1e-12) -> float:
-    true_arr = u_true.x.array.reshape(-1, u_true.function_space.dofmap.bs)
-    est_arr = u_est.x.array.reshape(-1, u_est.function_space.dofmap.bs)
-    true_norm = np.linalg.norm(true_arr, axis=1)
-    est_norm = np.linalg.norm(est_arr, axis=1)
-    mask = (true_norm > eps) & (est_norm > eps)
-    if not np.any(mask):
-        return 0.0
-    dots = np.sum(true_arr[mask] * est_arr[mask], axis=1) / (true_norm[mask] * est_norm[mask])
-    dots = np.clip(dots, -1.0, 1.0)
-    angles_deg = np.degrees(np.arccos(dots))
-    return float(np.sqrt(np.mean(angles_deg**2)))
 
 def save_velocity_csv(path: Path, velocity: fem.Function) -> None:
     coords = velocity.function_space.tabulate_dof_coordinates()[:, :2]
@@ -154,7 +43,7 @@ def save_velocity_csv(path: Path, velocity: fem.Function) -> None:
     data = np.column_stack([coords[:, 0], coords[:, 1], values[:, 0], values[:, 1]])
     np.savetxt(path, data, delimiter=",", header="x,y,wind_x,wind_y", comments="")
 
-def solve_estimator(estimator: AirflowEstimator, config: NsScenarioConfig, verbose: bool):
+def solve_estimator(estimator: AirflowEstimator, config: ScenarioConfig):
     solver_name = config.solver.strip().lower()
     if solver_name == "minimum_residual":
         return estimator.solve_minimum_residual(
@@ -162,7 +51,7 @@ def solve_estimator(estimator: AirflowEstimator, config: NsScenarioConfig, verbo
             tol=config.tol,
             damping=config.damping,
             regularization=config.regularization,
-            verbose=verbose,
+            verbose=False,
         )
     if solver_name == "weak_penalty":
         return estimator.solve_weak_penalty(
@@ -170,28 +59,29 @@ def solve_estimator(estimator: AirflowEstimator, config: NsScenarioConfig, verbo
             tol=config.tol,
             damping=config.damping,
             regularization=config.regularization,
-            verbose=verbose,
+            verbose=False,
         )
     if solver_name == "linear_least_squares":
         return estimator.solve_linear_least_squares(
             maxit=config.maxit,
             tol=config.tol,
             regularization=config.regularization,
-            verbose=verbose,
+            verbose=False,
         )
     raise ValueError(
         f"Unsupported solver {config.solver}, use one of: minimum_residual, weak_penalty, linear_least_squares."
     )
 
-def run_case(config: NsScenarioConfig, sample_csv: Path, sample_size: int | None, verbose: bool) -> dict:
-    result_dir = config.results_dir / "ns"
+def run_case(config: ScenarioConfig, sample_csv: Path, sample_size: int | None, verbose: bool) -> dict:
+    result_dir = config.result_dir / "ns"
     if sample_size is not None:
         result_dir = result_dir / f"{sample_size}samples"
     result_dir = result_dir / sample_csv.stem
     result_dir.mkdir(parents=True, exist_ok=True)
 
-    domain, _, facet_tags = dio.gmshio.read_from_msh(str(config.mesh), MPI.COMM_WORLD, gdim=2)
-    estimator = AirflowEstimator.from_domain(domain, facet_tags, meshfile=config.mesh)
+    with suppress_native_output():
+        domain, _, facet_tags = dio.gmshio.read_from_msh(str(config.mesh), MPI.COMM_WORLD, gdim=2)
+        estimator = AirflowEstimator.from_domain(domain, facet_tags, meshfile=config.mesh)
 
     elem_u = element("Lagrange", domain.basix_cell(), 2, shape=(domain.geometry.dim,))
     V_truth = fem.functionspace(domain, elem_u)
@@ -229,11 +119,25 @@ def run_case(config: NsScenarioConfig, sample_csv: Path, sample_size: int | None
         count=sample_size,
         max_xy_dist=config.max_xy_dist,
     )
-    result = solve_estimator(estimator, config, verbose)
+    estimation_start = time.perf_counter()
+    result = solve_estimator(estimator, config)
+    estimation_runtime_sec = time.perf_counter() - estimation_start
+    solver_status = getattr(estimator, "last_solver_status", {})
+    status_text = "converged" if solver_status.get("converged") else "reached max iterations"
+    iterations = solver_status.get("iterations", "?")
+    final_change = solver_status.get("final_relative_change")
+    change_text = "nan" if final_change is None else f"{float(final_change):.3e}"
+    if verbose:
+        print(
+            f"NS solver {status_text}"
+            f"({sample_size if sample_size is not None else 'all'} samples): "
+            f"iterations={iterations}/{config.maxit}, \nfinal_relative_change={change_text},\n tol={config.tol:.3e}"
+        )
     u_est = result.sub(0).collapse()
 
     metrics = {
         "scenario": config.name,
+        "estimator": "ns",
         "sample_name": sample_csv.stem,
         "sample_size": sample_size if sample_size is not None else int(mapping_info["n_input_samples"]),
         "samples_csv": str(sample_csv),
@@ -250,21 +154,25 @@ def run_case(config: NsScenarioConfig, sample_csv: Path, sample_size: int | None
         "weight_reg": config.weight_reg,
         "weight_boundary": config.weight_boundary,
         "n_discretization_points": int(u_est.function_space.tabulate_dof_coordinates().shape[0]),
-        "rmse": velocity_rmse(u_true, u_est),
-        "directional_rmse": directional_rmse(u_true, u_est),
-        "angular_rmse_deg": angular_rmse_deg(u_true, u_est),
+        "estimation_runtime_sec": float(estimation_runtime_sec),
+        "solver_converged": bool(solver_status.get("converged", False)),
+        "solver_iterations": int(solver_status.get("iterations", 0)),
+        "solver_max_iterations": int(solver_status.get("max_iterations", config.maxit)),
+        "solver_final_relative_change": float(solver_status.get("final_relative_change", float("nan"))),
         **mapping_info,
     }
 
     estimate_path = result_dir / "wind_estimate_ns.csv"
     metrics_path = result_dir / "metrics_wind_estimate_ns.json"
     save_velocity_csv(estimate_path, u_est)
+    metrics["wind_estimate_csv"] = str(estimate_path)
     with metrics_path.open("w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2)
 
     if verbose:
-        print(f"Saved estimate to: {estimate_path}")
-        print(f"Saved metrics to: {metrics_path}")
+        print("---")
+        #print(f"Saved estimate to: {estimate_path}")
+        #print(f"Saved metrics to: {metrics_path}")
 
     return metrics
 
@@ -290,14 +198,14 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    config = load_scenario(args.scenario)
+    config = ScenarioConfig.load(args.scenario)
 
     if args.samples:
         sample_files = [Path(args.samples).resolve(strict=True)]
     else:
-        sample_files = sorted(config.samples_dir.glob("sample_points*.csv"))
+        sample_files = sorted(config.sample_dir.glob("sample_points*.csv"))
         if not sample_files:
-            raise FileNotFoundError(f"No sample_points*.csv files found in {config.samples_dir}")
+            raise FileNotFoundError(f"No sample_points*.csv files found in {config.sample_dir}")
 
     sample_sizes = config.wind_sample_sizes or (None,)
     rows = []
