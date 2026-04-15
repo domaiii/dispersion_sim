@@ -1,6 +1,6 @@
 name: 10x6_appartment
 geometry:
-  mesh: geometry/appartment_2d.msh
+  mesh: geometry/appartment_2d_coarse.msh
   occupancy_yaml: geometry/occupancy.yaml
   occupancy_image: geometry/occupancy.pgm
   wall_pattern: wall|obstacle
@@ -22,10 +22,10 @@ ns_solver_parameters:
   viscosity: 1.0e-05
   weight_misfit: 100.0
   weight_pde_res: 1.0
-  weight_reg: 0.01
+  weight_reg: 0.1
   weight_boundary: 10000.0
 gmrf_parameters:
-  cell_size: 0.25
+  cell_size: 0.1
   var_speed: 0.01
   var_direction: 0.01
   batch_size: 25
