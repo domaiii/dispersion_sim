@@ -135,7 +135,7 @@ def run_case(config: ScenarioConfig, sample_csv: Path, sample_size: int | None, 
         )
     u_est = result.sub(0).collapse()
 
-    metrics = {
+    metadata = {
         "scenario": config.name,
         "estimator": "ns",
         "sample_name": sample_csv.stem,
@@ -163,18 +163,18 @@ def run_case(config: ScenarioConfig, sample_csv: Path, sample_size: int | None, 
     }
 
     estimate_path = result_dir / "wind_estimate_ns.csv"
-    metrics_path = result_dir / "metrics_wind_estimate_ns.json"
+    metadata_path = result_dir / "metadata_wind_est.json"
     save_velocity_csv(estimate_path, u_est)
-    metrics["wind_estimate_csv"] = str(estimate_path)
-    with metrics_path.open("w", encoding="utf-8") as f:
-        json.dump(metrics, f, indent=2)
+    metadata["wind_estimate_csv"] = str(estimate_path)
+    with metadata_path.open("w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2)
 
     if verbose:
         print("---")
         #print(f"Saved estimate to: {estimate_path}")
-        #print(f"Saved metrics to: {metrics_path}")
+        #print(f"Saved metadata to: {metadata_path}")
 
-    return metrics
+    return metadata
 
 
 

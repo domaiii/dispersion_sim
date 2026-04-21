@@ -29,6 +29,9 @@ gmrf_parameters:
   var_speed: 0.01
   var_direction: 0.01
   batch_size: 25
+gp_parameters:
+  length_scale: 1.0
+  optimize_length_scale: true
 meta:
   description: Symmetric 10x6 m room with a central obstacle and two doors
 wind_sample_sizes:

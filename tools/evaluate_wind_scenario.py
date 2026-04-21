@@ -20,7 +20,7 @@ EVALUATION_METRICS = [
     "angular_error_rmse_deg",
     "estimation_runtime_sec",
 ]
-METHODS = ["ns", "gmrf"]
+METHODS = ["ns", "gmrf", "gp"]
 
 def load_ground_truth_layer(config: ScenarioConfig) -> tuple[np.ndarray, np.ndarray, float]:
     z_height = infer_z_height(config.wind_csv, config.z_height)
@@ -73,6 +73,7 @@ def infer_estimate_csv(metrics_path: Path, method: str, payload: dict) -> Path |
     filename_by_method = {
         "ns": "wind_estimate_ns.csv",
         "gmrf": "wind_estimate_gmrf.csv",
+        "gp": "wind_estimate_gp.csv",
     }
     filename = filename_by_method.get(method)
     if filename is None:
@@ -92,6 +93,7 @@ def find_metrics_files(config: ScenarioConfig) -> list[Path]:
     for method in METHODS:
         method_dir = config.result_dir / method
         if method_dir.exists():
+            files.extend(method_dir.rglob("metadata_wind_est.json"))
             files.extend(method_dir.rglob("metrics*.json"))
     return sorted(files)
 

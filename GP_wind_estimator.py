@@ -129,26 +129,6 @@ class Grid:
         plt.close(fig)
         print(f"Saved {output_path}")
 
-    def estimate_wind_field_gpr(self, length: float):
-        x_m = [m.x for m in self.measurements]
-        y_m = [m.y for m in self.measurements]
-        ux_m = [m.u_x for m in self.measurements]
-        uy_m = [m.u_y for m in self.measurements]
-
-        kernel = 1 * RBF([length, length], length_scale_bounds=(1e-2, 1e2))
-        gp = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=15)
-        gp.fit(np.vstack([x_m, y_m]).T, np.vstack([ux_m, uy_m]).T)
-
-        u_pred, u_std = gp.predict(self.points, return_std=True)
-        
-        u_field = u_pred[:, 0].reshape(self.xx.shape)
-        v_field = u_pred[:, 1].reshape(self.yy.shape)
-
-        u_field[~self.free_mask] = np.nan
-        v_field[~self.free_mask] = np.nan
-
-        return u_field, v_field
-
     def estimate_wind_field(self, sigma: float):
         sum_weights = np.zeros_like(self.xx)
         sum_u = np.zeros_like(self.xx)
@@ -167,14 +147,18 @@ class Grid:
         
         return u_field, v_field
     
-    def estimate_wind_field_gpr(self, length: float):
+    def estimate_wind_field_gpr(self, length: float, optimize_length_scale: bool = True):
         x_m = np.array([m.x for m in self.measurements], dtype=float)
         y_m = np.array([m.y for m in self.measurements], dtype=float)
         ux_m = np.array([m.u_x for m in self.measurements], dtype=float)
         uy_m = np.array([m.u_y for m in self.measurements], dtype=float)
 
-        kernel = 1.0 * RBF([length, length], length_scale_bounds=(1e-2, 1e2))
-        gp = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=9)
+        length_scale_bounds = (1e-2, 1e2) if optimize_length_scale else "fixed"
+        kernel = 1.0 * RBF([length, length], length_scale_bounds=length_scale_bounds)
+        gp = GaussianProcessRegressor(
+            kernel=kernel,
+            n_restarts_optimizer=9 if optimize_length_scale else 0,
+        )
         gp.fit(np.vstack([x_m, y_m]).T, np.vstack([ux_m, uy_m]).T)
 
         u_pred, u_std = gp.predict(self.points, return_std=True)
@@ -273,6 +257,3 @@ if __name__ == "__main__":
 
     
     
-
-
-

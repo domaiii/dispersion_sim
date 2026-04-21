@@ -93,11 +93,11 @@ def run_case(config: ScenarioConfig, sample_file_csv: Path, sample_size: int,
 
     out_csv = result_dir / "wind_estimate_gmrf.csv"
     out_png = result_dir / "wind_estimate_gmrf.png"
-    metrics_path = result_dir / "metrics.json"
+    metadata_path = result_dir / "metadata_wind_est.json"
     gmrf_client.save_estimation_csv(out_csv, res, config.gmrf_cell_size, config.occupancy_yaml)
     gmrf_client.save_estimation_png(out_png, res, sample_size, obs_to_use, config.gmrf_cell_size, config.occupancy_yaml)
 
-    metrics = {
+    metadata = {
         "scenario": config.name,
         "estimator": "gmrf",
         "sample_name": sample_file_csv.stem,
@@ -113,12 +113,12 @@ def run_case(config: ScenarioConfig, sample_file_csv: Path, sample_size: int,
         "n_discretization_points": count_csv_data_rows(out_csv),
         "estimation_runtime_sec": float(estimation_runtime_sec),
     }
-    with metrics_path.open("w", encoding="utf-8") as f:
-        json.dump(metrics, f, indent=2)
+    with metadata_path.open("w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2)
 
     node.clear_observations()
     print(f"Saved result to {out_csv}")
-    print(f"Saved metrics to {metrics_path}")
+    print(f"Saved metadata to {metadata_path}")
     return 0
 
 

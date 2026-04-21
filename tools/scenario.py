@@ -46,6 +46,8 @@ class ScenarioConfig:
     variance_speed: float = 0.01
     variance_direction: float = 0.01
     batch_size: int = 50
+    gp_length_scale: float = 1.0
+    gp_optimize_length_scale: bool = True
 
     @classmethod
     def load(cls, scenario: str | Path) -> "ScenarioConfig":
@@ -62,6 +64,7 @@ class ScenarioConfig:
         slicing = raw.get("ground_truth_slicing", {})
         solver = raw.get("ns_solver_parameters", {})
         gmrf = raw.get("gmrf_parameters", {})
+        gp = raw.get("gp_parameters", {})
         damping = solver.get("damping", cls.damping)
 
         return cls(
@@ -93,6 +96,8 @@ class ScenarioConfig:
             variance_speed=float(gmrf.get("var_speed", cls.variance_speed)),
             variance_direction=float(gmrf.get("var_direction", cls.variance_direction)),
             batch_size=int(gmrf.get("batch_size", cls.batch_size)),
+            gp_length_scale=float(gp.get("length_scale", cls.gp_length_scale)),
+            gp_optimize_length_scale=bool(gp.get("optimize_length_scale", cls.gp_optimize_length_scale)),
         )
 
 
