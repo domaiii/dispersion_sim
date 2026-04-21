@@ -2,6 +2,7 @@ jupyterlab
 pandas
 pygmsh
 scipy
+scikit-learn
 pyvista
 adios4dolfinx
 opencv-python
