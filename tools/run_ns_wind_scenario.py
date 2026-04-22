@@ -164,7 +164,7 @@ def run_case(config: ScenarioConfig, sample_csv: Path, sample_size: int | None, 
         **mapping_info,
     }
 
-    estimate_path = result_dir / "wind_estimate_ns.csv"
+    estimate_path = result_dir / "wind_estimate.csv"
     metadata_path = result_dir / "metadata_wind_est.json"
     save_velocity_csv(estimate_path, u_est)
     metadata["wind_estimate_csv"] = str(estimate_path)

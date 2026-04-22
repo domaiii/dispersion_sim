@@ -67,8 +67,8 @@ def run_case(config: ScenarioConfig, sample_csv: Path, sample_size: int | None, 
     )
     estimation_runtime_sec = time.perf_counter() - estimation_start
 
-    estimate_path = result_dir / "wind_estimate_gp.csv"
-    plot_path = result_dir / "wind_estimate_gp.png"
+    estimate_path = result_dir / "wind_estimate.csv"
+    plot_path = result_dir / "wind_estimate.png"
     metadata_path = result_dir / "metadata_wind_est.json"
 
     save_wind_csv(estimate_path, grid, u_field, v_field)

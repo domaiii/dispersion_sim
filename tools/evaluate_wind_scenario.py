@@ -20,8 +20,6 @@ EVALUATION_METRICS = [
     "angular_error_rmse_deg",
     "estimation_runtime_sec",
 ]
-METHODS = ["ns", "gmrf", "gp"]
-
 def load_ground_truth_layer(config: ScenarioConfig) -> tuple[np.ndarray, np.ndarray, float]:
     z_height = infer_z_height(config.wind_csv, config.z_height)
     gt = pd.read_csv(
@@ -39,9 +37,6 @@ def load_ground_truth_layer(config: ScenarioConfig) -> tuple[np.ndarray, np.ndar
 
 
 def infer_method(path: Path, scenario_root: Path, payload: dict) -> str | None:
-    if "estimator" in payload:
-        return str(payload["estimator"])
-
     try:
         parts = path.relative_to(scenario_root).parts
     except ValueError:
@@ -51,6 +46,9 @@ def infer_method(path: Path, scenario_root: Path, payload: dict) -> str | None:
         idx = parts.index("results")
         if idx + 1 < len(parts):
             return parts[idx + 1]
+
+    if "estimator" in payload:
+        return str(payload["estimator"])
     return None
 
 
@@ -70,19 +68,8 @@ def infer_estimate_csv(metrics_path: Path, method: str, payload: dict) -> Path |
         if candidate.exists():
             return candidate
 
-    filename_by_method = {
-        "ns": "wind_estimate_ns.csv",
-        "gmrf": "wind_estimate_gmrf.csv",
-        "gp": "wind_estimate_gp.csv",
-    }
-    filename = filename_by_method.get(method)
-    if filename is None:
-        return None
-
-    candidate = metrics_path.parent / filename
-    if candidate.exists():
-        return candidate
-    return None
+    candidate = metrics_path.parent / "wind_estimate.csv"
+    return candidate if candidate.exists() else None
 
 
 def find_metrics_files(config: ScenarioConfig) -> list[Path]:
@@ -90,11 +77,11 @@ def find_metrics_files(config: ScenarioConfig) -> list[Path]:
         return []
 
     files: list[Path] = []
-    for method in METHODS:
-        method_dir = config.result_dir / method
-        if method_dir.exists():
-            files.extend(method_dir.rglob("metadata_wind_est.json"))
-            files.extend(method_dir.rglob("metrics*.json"))
+    for method_dir in sorted(config.result_dir.iterdir()):
+        if not method_dir.is_dir():
+            continue
+        files.extend(method_dir.rglob("metadata_wind_est.json"))
+        files.extend(method_dir.rglob("metrics*.json"))
     return sorted(files)
 
 

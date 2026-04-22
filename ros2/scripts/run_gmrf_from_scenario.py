@@ -92,8 +92,8 @@ def run_case(config: ScenarioConfig, sample_file_csv: Path, sample_size: int,
         node.get_logger().error("WindEstimation query failed.")
         return 1
 
-    out_csv = result_dir / "wind_estimate_gmrf.csv"
-    out_png = result_dir / "wind_estimate_gmrf.png"
+    out_csv = result_dir / "wind_estimate.csv"
+    out_png = result_dir / "wind_estimate.png"
     metadata_path = result_dir / "metadata_wind_est.json"
     gmrf_client.save_estimation_csv(out_csv, res, config.gmrf_cell_size, config.occupancy_yaml)
     gmrf_client.save_estimation_png(out_png, res, sample_size, obs_to_use, config.gmrf_cell_size, config.occupancy_yaml)
