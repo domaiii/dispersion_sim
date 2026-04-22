@@ -8,12 +8,12 @@ saves estimation results back to CSV. It is imported by the executable scripts s
 workflow code can stay short.
 """
 import csv
-import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
+import pandas as pd
 import rclpy
 import yaml
 from rclpy.node import Node
@@ -91,32 +91,37 @@ class GmrfClient(Node):
         return self._wait_future(future, timeout_sec)
 
 
-def load_observations(csv_path: Path, var_speed: float, var_direction: float) -> list[Observation]:
+def load_observations(csv_path: Path, var_speed: float, var_direction: float,
+                      noise_std: float | None = None) -> list[Observation]:
     if not csv_path.exists():
         raise FileNotFoundError(f"CSV not found: {csv_path}")
 
-    observations: list[Observation] = []
-    with csv_path.open("r", newline="") as f:
-        reader = csv.DictReader(f)
-        required = {"x", "y", "wind_x", "wind_y"}
-        missing = required.difference(set(reader.fieldnames or []))
-        if missing:
-            raise ValueError(f"Missing required CSV columns: {sorted(missing)}")
+    df = pd.read_csv(csv_path)
+    required = {"x", "y", "wind_x", "wind_y"}
+    missing = required.difference(df.columns)
+    if missing:
+        raise ValueError(f"Missing required CSV columns: {sorted(missing)}")
 
-        for row in reader:
-            wx = float(row["wind_x"])
-            wy = float(row["wind_y"])
-            observations.append(
-                Observation(
-                    x=float(row["x"]),
-                    y=float(row["y"]),
-                    speed=math.hypot(wx, wy),
-                    direction=math.atan2(wy, wx),
-                    var_speed=var_speed,
-                    var_direction=var_direction,
-                )
-            )
-    return observations
+    xy = df[["x", "y"]].to_numpy(dtype=float)
+    wind = df[["wind_x", "wind_y"]].to_numpy(dtype=float)
+
+    if noise_std is not None:
+        wind += np.random.normal(0.0, noise_std, size=wind.shape)
+
+    speed = np.hypot(wind[:, 0], wind[:, 1])
+    direction = np.arctan2(wind[:, 1], wind[:, 0])
+
+    return [
+        Observation(
+            x=x,
+            y=y,
+            speed=s,
+            direction=d,
+            var_speed=var_speed,
+            var_direction=var_direction,
+        )
+        for (x, y), s, d in zip(xy, speed, direction)
+    ]
 
 
 def batched(data: list[Observation], size: int):

@@ -23,6 +23,7 @@ class ScenarioConfig:
     wind_csv: Path
     sample_dir: Path
     result_dir: Path
+    wind_noise_std: float = 0.0
     z_height: float | None = None
     z_tol: float = 0.05
     max_xy_dist: float = 0.2
@@ -61,6 +62,7 @@ class ScenarioConfig:
         root = scenario.parent
         geometry = raw.get("geometry", {})
         data = raw.get("data", {})
+        noise = raw.get("measurement_noise", {})
         slicing = raw.get("ground_truth_slicing", {})
         solver = raw.get("ns_solver_parameters", {})
         gmrf = raw.get("gmrf_parameters", {})
@@ -78,6 +80,7 @@ class ScenarioConfig:
             wind_csv=(root / data["wind_csv"]).resolve(),
             sample_dir=(root / data["sample_dir"]).resolve(),
             result_dir=(root / data["result_dir"]).resolve(),
+            wind_noise_std=(float(noise.get("wind_noise_std", cls.wind_noise_std))),
             z_height=None if slicing.get("z_height") is None else float(slicing["z_height"]),
             z_tol=float(slicing.get("z_tol", cls.z_tol)),
             max_xy_dist=float(slicing.get("max_xy_dist", cls.max_xy_dist)),
@@ -97,7 +100,7 @@ class ScenarioConfig:
             variance_direction=float(gmrf.get("var_direction", cls.variance_direction)),
             batch_size=int(gmrf.get("batch_size", cls.batch_size)),
             gp_length_scale=float(gp.get("length_scale", cls.gp_length_scale)),
-            gp_optimize_length_scale=bool(gp.get("optimize_length_scale", cls.gp_optimize_length_scale)),
+            gp_optimize_length_scale=bool(gp.get("optimize_length_scale", cls.gp_optimize_length_scale))
         )
 
 

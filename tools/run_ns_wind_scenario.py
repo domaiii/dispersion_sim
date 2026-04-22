@@ -73,7 +73,7 @@ def solve_estimator(estimator: AirflowEstimator, config: ScenarioConfig):
     )
 
 def run_case(config: ScenarioConfig, sample_csv: Path, sample_size: int | None, verbose: bool) -> dict:
-    result_dir = config.result_dir / "ns"
+    result_dir = config.result_dir / config.solver.strip().lower()
     if sample_size is not None:
         result_dir = result_dir / f"{sample_size}samples"
     result_dir = result_dir / sample_csv.stem
@@ -117,6 +117,7 @@ def run_case(config: ScenarioConfig, sample_csv: Path, sample_size: int | None, 
     mapping_info = estimator.set_measurements_from_csv(
         sample_csv,
         count=sample_size,
+        noise_std=config.wind_noise_std,
         max_xy_dist=config.max_xy_dist,
     )
     estimation_start = time.perf_counter()
@@ -143,6 +144,7 @@ def run_case(config: ScenarioConfig, sample_csv: Path, sample_size: int | None, 
         "samples_csv": str(sample_csv),
         "mesh": str(config.mesh),
         "wind_csv": str(config.wind_csv),
+        "wind_noise_std": str(config.wind_noise_std),
         "solver": config.solver,
         "regularization": config.regularization,
         "maxit": config.maxit,

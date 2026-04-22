@@ -9,6 +9,8 @@ data:
   wind_csv: wind_gt.csv
   sample_dir: samples
   result_dir: results
+measurement_noise:
+  wind_noise_std: 0.0
 ground_truth_slicing:
   z_height: 0.025
   z_tol: 0.025

@@ -63,7 +63,8 @@ def run_case(config: ScenarioConfig, sample_file_csv: Path, sample_size: int,
 
     observations = gmrf_client.load_observations(sample_file_csv,
                                                  config.variance_speed,
-                                                 config.variance_direction)
+                                                 config.variance_direction,
+                                                 config.wind_noise_std)
 
     if len(observations) < sample_size:
         node.get_logger().error(
@@ -104,6 +105,7 @@ def run_case(config: ScenarioConfig, sample_file_csv: Path, sample_size: int,
         "sample_size": sample_size,
         "samples_csv": str(sample_file_csv),
         "wind_csv": str(config.wind_csv),
+        "wind_noise_std": str(config.wind_noise_std),
         "occupancy_yaml": str(config.occupancy_yaml),
         "wind_estimate_csv": str(out_csv),
         "gmrf_cell_size": float(config.gmrf_cell_size),

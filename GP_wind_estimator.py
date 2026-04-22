@@ -63,7 +63,8 @@ class Grid:
         dist_sq = (x - x0) ** 2 + (y - y0) ** 2
         return np.exp(-dist_sq / (2.0 * sigma**2))
 
-    def add_csv_measurements(self, path: str | Path, count: int | None = None):
+    def add_csv_measurements(self, path: str | Path, count: int | None = None, 
+                             std_noise: float | None = None):
         samples_csv = Path(path).resolve(strict=True)
         df = pd.read_csv(samples_csv)
         if count is not None:
@@ -85,6 +86,11 @@ class Grid:
             )
         if len(df) == 0:
             raise ValueError(f"No sample rows found in {samples_csv}")
+
+        if std_noise is not None:
+            df.loc[:, ["wind_x", "wind_y"]] += np.random.normal(
+                0.0, std_noise, size=(len(df), 2)
+            )
 
         for row in df.itertuples():
             self.add_measurement(row.x, row.y, row.wind_x, row.wind_y)

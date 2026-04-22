@@ -58,7 +58,7 @@ def run_case(config: ScenarioConfig, sample_csv: Path, sample_size: int | None, 
     result_dir.mkdir(parents=True, exist_ok=True)
 
     grid = Grid.from_occupancy_yaml(config.occupancy_yaml)
-    grid.add_csv_measurements(sample_csv, count=sample_size)
+    grid.add_csv_measurements(sample_csv, count=sample_size, std_noise=config.wind_noise_std)
 
     estimation_start = time.perf_counter()
     u_field, v_field = grid.estimate_wind_field_gpr(
@@ -81,6 +81,7 @@ def run_case(config: ScenarioConfig, sample_csv: Path, sample_size: int | None, 
         "sample_size": sample_size if sample_size is not None else len(grid.measurements),
         "samples_csv": str(sample_csv),
         "wind_csv": str(config.wind_csv),
+        "wind_noise_std": str(config.wind_noise_std),
         "occupancy_yaml": str(config.occupancy_yaml),
         "wind_estimate_csv": str(estimate_path),
         "wind_estimate_png": str(plot_path),

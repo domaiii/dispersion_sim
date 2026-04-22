@@ -23,6 +23,7 @@ class AirflowMeasurements:
     def set_from_csv(self,
                      samples_csv: str | Path,
                      count: int | None = None,
+                     noise_std: float | None = None,
                      max_xy_dist: float | None = None) -> dict[str, float]:
         samples_csv = Path(samples_csv).resolve(strict=True)
         df = pd.read_csv(samples_csv)
@@ -47,7 +48,10 @@ class AirflowMeasurements:
             raise ValueError(f"No sample rows found in {samples_csv}")
 
         samples_xy = df[["x", "y"]].to_numpy(dtype=float)
-        samples_uv = df[["wind_x", "wind_y"]].to_numpy(dtype=float)
+        samples_uv = df[["wind_x", "wind_y"]].to_numpy(dtype=float) 
+        
+        if noise_std is not None: 
+            samples_uv += np.random.normal(0, noise_std, (len(df), 2))
 
         node_xy = np.asarray(self.estimator.V.tabulate_dof_coordinates(), dtype=float)[:, :2]
         tree = cKDTree(node_xy)
@@ -482,6 +486,7 @@ class AirflowEstimator:
         self,
         samples_csv: str | Path,
         count: int | None = None,
+        noise_std: float | None = None,
         max_xy_dist: float | None = None,
     ) -> dict[str, float]:
         """
@@ -495,6 +500,8 @@ class AirflowEstimator:
             Path to sample CSV.
         count : int | None
             Optional number of rows to import from the top of the CSV. If omitted, all rows are used.
+        noise_std : float | None
+            Optional standard deviation for gaussian noise level to be added to the measurements.
         max_xy_dist : float | None
             Optional maximum allowed nearest-neighbor mapping distance in XY.
 
@@ -506,6 +513,7 @@ class AirflowEstimator:
         return self.measurements.set_from_csv(
             samples_csv=samples_csv,
             count=count,
+            noise_std=noise_std,
             max_xy_dist=max_xy_dist,
         )
 
