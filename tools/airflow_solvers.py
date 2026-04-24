@@ -399,17 +399,24 @@ class LinearLeastSquaresSolver(BaseAirflowSolver):
         super().__init__(ctx)
         self._smooth_regularization_operator: sps.csr_matrix | None = None
 
+    def _collect_bc_dofs(self) -> np.ndarray:
+        bc_dofs: list[int] = []
+        for bc in self.ctx.bcs:
+            bc_dofs.extend(map(int, bc.dof_indices()[0]))
+        return np.asarray(sorted(set(bc_dofs)), dtype=np.int32)
+
+    @staticmethod
+    def _selection_matrix(indices: np.ndarray, num_cols: int) -> sps.csr_matrix:
+        indices = np.asarray(indices, dtype=np.int32).reshape(-1)
+        rows = np.arange(indices.size, dtype=np.int32)
+        vals = np.ones(indices.size, dtype=float)
+        return sps.csr_matrix((vals, (rows, indices)), shape=(indices.size, num_cols))
+
     def _build_linear_regularization_operator(self, reg_mode: str) -> sps.csr_matrix:
         num_total_dofs = self._num_dofs(self.ctx.W)
 
         if reg_mode == "value":
-            v_map = self.ctx.W.sub(0).dofmap
-            u_dofs = np.unique(v_map.list.flatten())
-            rows = np.arange(len(u_dofs))
-            return sps.csr_matrix(
-                (np.ones_like(u_dofs, dtype=float), (rows, u_dofs)),
-                shape=(len(u_dofs), num_total_dofs),
-            )
+            return sps.identity(num_total_dofs, format="csr")
 
         if self._smooth_regularization_operator is not None:
             return self._smooth_regularization_operator
@@ -418,6 +425,7 @@ class LinearLeastSquaresSolver(BaseAirflowSolver):
             self.ctx.V.tabulate_dof_coordinates(),
             dtype=float,
         )[:, :self.ctx.domain.geometry.dim]
+
         num_points = len(coords)
         if num_points < 2:
             self._smooth_regularization_operator = sps.csr_matrix((0, num_total_dofs))
@@ -434,14 +442,17 @@ class LinearLeastSquaresSolver(BaseAirflowSolver):
 
         for i in range(num_points):
             for dist_ij, j in zip(np.atleast_1d(dists[i])[1:], np.atleast_1d(neighbors[i])[1:]):
-                edge = (i, int(j)) if i < int(j) else (int(j), i)
+                j = int(j)
+                edge = (i, j) if i < j else (j, i)
                 if edge[0] == edge[1] or edge in seen_edges:
                     continue
+
                 seen_edges.add(edge)
                 weight = 1.0 / max(float(dist_ij), 1e-12)
+
                 for comp in range(dim):
                     wi = int(self.ctx.V_to_W[i * dim + comp])
-                    wj = int(self.ctx.V_to_W[int(j) * dim + comp])
+                    wj = int(self.ctx.V_to_W[j * dim + comp])
                     rows.extend([row_id, row_id])
                     cols.extend([wi, wj])
                     vals.extend([weight, -weight])
@@ -455,66 +466,80 @@ class LinearLeastSquaresSolver(BaseAirflowSolver):
 
     def _prepare_solve(self, reg_mode: str):
         num_total_dofs = self._num_dofs(self.ctx.W)
+
+        bc_dofs = self._collect_bc_dofs()
+        R_sp = self._selection_matrix(bc_dofs, num_total_dofs)
+
+        m_idx = np.asarray(self.ctx.measurement_ids_W, dtype=np.int32).reshape(-1)
+        M_sp = self._selection_matrix(m_idx, num_total_dofs)
+
         reg_op = self._build_linear_regularization_operator(reg_mode)
 
-        bc_rows, bc_cols, bc_vals = [], [], []
-        for bc in self.ctx.bcs:
-            for dof in bc.dof_indices()[0]:
-                bc_rows.append(len(bc_rows))
-                bc_cols.append(dof)
-                bc_vals.append(1.0)
-        R_sp = sps.csr_matrix((bc_vals, (bc_rows, bc_cols)), shape=(len(bc_rows), num_total_dofs))
+        free_pde_rows = np.ones(num_total_dofs, dtype=bool)
+        free_pde_rows[bc_dofs] = False
 
-        m_idx = self.ctx.measurement_ids_W
-        M_sp = sps.csr_matrix(
-            (np.ones_like(m_idx, dtype=float), (np.arange(len(m_idx)), m_idx)),
-            shape=(len(m_idx), num_total_dofs),
-        )
-
-        fixed_blocks = [
+        fixed_matrix = sps.vstack([
             np.sqrt(self.ctx.weight_boundary) * R_sp,
             np.sqrt(self.ctx.weight_misfit) * M_sp,
             np.sqrt(self.ctx.weight_reg) * reg_op,
-        ]
-        fixed_rhs = [
-            np.zeros(len(bc_rows)),
+        ]).tocsr()
+
+        fixed_rhs = np.concatenate([
+            np.zeros(R_sp.shape[0]),
             np.sqrt(self.ctx.weight_misfit) * self.ctx.w_measured.x.array[m_idx],
             np.zeros(reg_op.shape[0]),
-        ]
+        ])
 
         return {
             "num_total_dofs": num_total_dofs,
             "sqrt_w_pde": np.sqrt(self.ctx.weight_pde_res),
+            "free_pde_rows": free_pde_rows,
             "reg_op": reg_op,
-            "fixed_matrix": sps.vstack(fixed_blocks).tocsr(),
-            "fixed_rhs": np.concatenate(fixed_rhs),
+            "fixed_matrix": fixed_matrix,
+            "fixed_rhs": fixed_rhs,
         }
 
     def _solve_step(self, wh_prev: fem.Function, wh: fem.Function, reg_mode: str, context):
         K_petsc, f_petsc = self._build_weak_form_system(wh_prev)
+
         ai, aj, av = K_petsc.getValuesCSR()
-        K_sp = sps.csr_matrix((av, aj, ai), shape=(context["num_total_dofs"], context["num_total_dofs"]))
+        K_sp = sps.csr_matrix(
+            (av, aj, ai),
+            shape=(context["num_total_dofs"], context["num_total_dofs"]),
+        )
+
+        free_rows = context["free_pde_rows"]
+        K_sp = K_sp[free_rows, :]
+        f_vec = np.asarray(f_petsc.array, dtype=float)[free_rows]
 
         A_stack = sps.vstack([
             context["sqrt_w_pde"] * K_sp,
             context["fixed_matrix"],
         ]).tocsr()
+
         b_stack = np.concatenate([
-            -context["sqrt_w_pde"] * f_petsc.array,
+            -context["sqrt_w_pde"] * f_vec,
             context["fixed_rhs"],
         ])
 
-        wh.x.array[:] = lsqr(A_stack, b_stack, iter_lim=5000)[0]
+        result = lsqr(A_stack, b_stack, iter_lim=5000)[0]
+        wh.x.array[:] = result
+        wh.x.scatter_forward()
 
     def _evaluate_terms(self, wh: fem.Function, reg_mode: str, context) -> dict[str, float]:
         K_petsc, f_petsc = self._build_weak_form_system(wh)
+
         residual = f_petsc.duplicate()
         K_petsc.mult(wh.x.petsc_vec, residual)
         residual.axpy(-1.0, f_petsc)
-        pde = float(residual.norm(PETSc.NormType.NORM_2) ** 2)
+
+        residual_arr = np.asarray(residual.array, dtype=float)
+        pde_residual = residual_arr[context["free_pde_rows"]]
+        pde = float(np.dot(pde_residual, pde_residual))
 
         boundary = self._boundary_penalty(wh)
         misfit = self._measurement_misfit(wh)
+
         reg_vec = context["reg_op"] @ wh.x.array
         reg = float(np.dot(reg_vec, reg_vec))
 

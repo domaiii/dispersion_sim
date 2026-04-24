@@ -48,7 +48,7 @@ class AirflowMeasurements:
             raise ValueError(f"No sample rows found in {samples_csv}")
 
         samples_xy = df[["x", "y"]].to_numpy(dtype=float)
-        samples_uv = df[["wind_x", "wind_y"]].to_numpy(dtype=float) 
+        samples_uv = df[["wind_x", "wind_y"]].to_numpy(dtype=float, copy=True)
         
         if noise_std is not None: 
             samples_uv += np.random.normal(0, noise_std, (len(df), 2))

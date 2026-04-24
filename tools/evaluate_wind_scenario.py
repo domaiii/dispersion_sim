@@ -20,6 +20,26 @@ EVALUATION_METRICS = [
     "angular_error_rmse_deg",
     "estimation_runtime_sec",
 ]
+
+
+def normalize_method_filters(methods: list[str] | None) -> set[str] | None:
+    if not methods:
+        return None
+    return {method.strip() for method in methods if method.strip()}
+
+
+def method_is_selected(
+    method: str,
+    include_methods: set[str] | None,
+    exclude_methods: set[str] | None,
+) -> bool:
+    if include_methods is not None and method not in include_methods:
+        return False
+    if exclude_methods is not None and method in exclude_methods:
+        return False
+    return True
+
+
 def load_ground_truth_layer(config: ScenarioConfig) -> tuple[np.ndarray, np.ndarray, float]:
     z_height = infer_z_height(config.wind_csv, config.z_height)
     gt = pd.read_csv(
@@ -72,13 +92,19 @@ def infer_estimate_csv(metrics_path: Path, method: str, payload: dict) -> Path |
     return candidate if candidate.exists() else None
 
 
-def find_metrics_files(config: ScenarioConfig) -> list[Path]:
+def find_metrics_files(
+    config: ScenarioConfig,
+    include_methods: set[str] | None = None,
+    exclude_methods: set[str] | None = None,
+) -> list[Path]:
     if not config.result_dir.exists():
         return []
 
     files: list[Path] = []
     for method_dir in sorted(config.result_dir.iterdir()):
         if not method_dir.is_dir():
+            continue
+        if not method_is_selected(method_dir.name, include_methods, exclude_methods):
             continue
         files.extend(method_dir.rglob("metadata_wind_est.json"))
         files.extend(method_dir.rglob("metrics*.json"))
@@ -151,13 +177,15 @@ def compute_csv_error_metrics(
 def load_and_evaluate_runs(
     config: ScenarioConfig,
     angular_speed_threshold: float,
+    include_methods: set[str] | None = None,
+    exclude_methods: set[str] | None = None,
 ) -> pd.DataFrame:
     gt_xy, gt_uv, z_height = load_ground_truth_layer(config)
     gt_tree = cKDTree(gt_xy)
 
     rows = []
     skipped = []
-    for metrics_path in find_metrics_files(config):
+    for metrics_path in find_metrics_files(config, include_methods, exclude_methods):
         with metrics_path.open("r", encoding="utf-8") as f:
             payload = json.load(f)
 
@@ -165,6 +193,8 @@ def load_and_evaluate_runs(
         sample_size = infer_sample_size(metrics_path, payload)
         if method is None or sample_size is None:
             skipped.append((metrics_path, "missing method or sample_size"))
+            continue
+        if not method_is_selected(method, include_methods, exclude_methods):
             continue
 
         estimate_csv = infer_estimate_csv(metrics_path, method, payload)
@@ -283,6 +313,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("scenario", type=str, help="Path to a scenario directory or scenario.yaml.")
     parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=None,
+        help="Optional output directory for evaluation CSVs and plots. Defaults to <scenario>/eval.",
+    )
+    parser.add_argument(
         "--band",
         choices=["std", "sem", "none"],
         default="std",
@@ -294,21 +330,45 @@ def parse_args() -> argparse.Namespace:
         default=0.05,
         help="Only compute angular errors where ground-truth speed exceeds this threshold [m/s].",
     )
+    parser.add_argument(
+        "--methods",
+        nargs="+",
+        default=None,
+        help="Only evaluate the listed method directories below results/ (for example: ns ns_variant_a).",
+    )
+    parser.add_argument(
+        "--exclude-methods",
+        nargs="+",
+        default=None,
+        help="Exclude the listed method directories below results/ (for example: gmrf).",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     config = ScenarioConfig.load(args.scenario)
-    output_dir = config.root / "eval"
+    include_methods = normalize_method_filters(args.methods)
+    exclude_methods = normalize_method_filters(args.exclude_methods)
+    output_dir = (Path(args.output_dir).expanduser().resolve() if args.output_dir else config.root / "eval")
     output_dir.mkdir(parents=True, exist_ok=True)
     df = load_and_evaluate_runs(
         config,
         angular_speed_threshold=float(args.angular_speed_threshold),
+        include_methods=include_methods,
+        exclude_methods=exclude_methods,
     )
     if df.empty:
+        method_filter_msg = []
+        if include_methods:
+            method_filter_msg.append(f"including {sorted(include_methods)}")
+        if exclude_methods:
+            method_filter_msg.append(f"excluding {sorted(exclude_methods)}")
+        method_filter_suffix = ""
+        if method_filter_msg:
+            method_filter_suffix = " (" + ", ".join(method_filter_msg) + ")"
         raise FileNotFoundError(
-            f"No evaluable runs found below {config.result_dir} for methods {METHODS}."
+            f"No evaluable runs found below {config.result_dir}{method_filter_suffix}."
         )
 
     summaries = [aggregate_metric(df, metric) for metric in EVALUATION_METRICS]

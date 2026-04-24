@@ -73,7 +73,7 @@ def solve_estimator(estimator: AirflowEstimator, config: ScenarioConfig):
     )
 
 def run_case(config: ScenarioConfig, sample_csv: Path, sample_size: int | None, verbose: bool) -> dict:
-    result_dir = config.result_dir / config.solver.strip().lower()
+    result_dir = config.result_dir / f"ns_{config.solver.strip().lower()}"
     if sample_size is not None:
         result_dir = result_dir / f"{sample_size}samples"
     result_dir = result_dir / sample_csv.stem
@@ -211,12 +211,15 @@ def main() -> None:
 
     sample_sizes = config.wind_sample_sizes or (None,)
     rows = []
+    output_root = config.result_dir / f"ns_{config.solver.strip().lower()}"
     for sample_size in sample_sizes:
         for sample_csv in sample_files:
             if args.verbose:
                 label = f" with first {sample_size} samples" if sample_size is not None else ""
                 print(f"Running NS wind for {sample_csv.name}{label}")
             rows.append(run_case(config, sample_csv, sample_size, args.verbose))
+
+    print(f"Saved {len(rows)} NS runs under: {output_root}")
 
 
 if __name__ == "__main__":
