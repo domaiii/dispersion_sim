@@ -8,7 +8,7 @@ from pathlib import Path
 from scipy.spatial import cKDTree
 from basix.ufl import element, mixed_element
 from dolfinx import fem, mesh
-from airflow_solvers import (
+from tools.airflow_solvers import (
     AirflowSolverConfig,
     LinearLeastSquaresSolver,
     MinimumResidualSolver,

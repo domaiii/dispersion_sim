@@ -10,7 +10,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from GP_wind_estimator import Grid
+from tools.GP_wind_estimator import Grid
 from scenario import ScenarioConfig
 
 
@@ -110,7 +110,7 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "inputs",
+        "samples",
         type=str,
         nargs="+",
         help="Path(s) to sample CSV files, scenario directories, or scenario.yaml files.",
@@ -121,7 +121,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    for raw_input in args.inputs:
+    for raw_input in args.samples:
         input_path = Path(raw_input).resolve(strict=True)
         config = ScenarioConfig.load(infer_scenario_path(input_path))
         sample_files = select_sample_files(input_path, config)
